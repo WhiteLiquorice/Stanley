@@ -1,0 +1,11 @@
+{
+  "name": "com.project.stanley",
+  "description": "Project Stanley Desktop Daemon Host",
+  "path": "a:\\Projects\\SaaS\\Stanley\\stanley-daemon\\daemon.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*/*",
+    "chrome-extension://kpmjfgchdfpgpndghjddcblfefphdbgo/",
+    "chrome-extension://lhflgogbdfclcdljgfclnchmgnmgacpa/"
+  ]
+}
