@@ -70,7 +70,7 @@ export function Landing() {
       {/* Hero Section */}
       <section className="hero-section">
         <div className="hero-badge">
-          <Activity size={14} /> Local Enterprise Automation
+          <Activity size={14} /> Local Enterprise-Grade Automation
         </div>
         
         <h1 className="hero-title animate-fade-in" style={{ animationDelay: '100ms' }}>
