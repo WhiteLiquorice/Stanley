@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Blue Bottle Coffee Mission — Google Reviews</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Roboto, Arial, sans-serif; font-size: 14px; background: #fff; color: #202124; }
+
+  /* Top search bar */
+  .gbar { background: #fff; border-bottom: 1px solid #e8eaed; padding: 10px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
+  .g-logo { font-size: 24px; font-weight: 400; color: #4285f4; letter-spacing: -1px; }
+  .g-logo .o { color: #DB4437; }
+  .g-logo .l { color: #F4B400; }
+  .g-logo .e { color: #0F9D58; }
+  .search-input { flex: 1; max-width: 600px; border: 1px solid #dfe1e5; border-radius: 24px; padding: 10px 20px; font-size: 16px; outline: none; display: flex; align-items: center; gap: 10px; background: #f1f3f4; }
+  .search-input input { border: none; background: transparent; font-size: 16px; outline: none; flex: 1; color: #202124; }
+  .nav-icons { display: flex; gap: 8px; color: #5f6368; font-size: 13px; align-items: center; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: #4285f4; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; }
+
+  /* Layout */
+  .main { display: flex; max-width: 1200px; margin: 0 auto; padding: 16px; gap: 24px; }
+
+  /* Knowledge panel */
+  .knowledge-panel { width: 380px; flex-shrink: 0; }
+  .kp-card { border: 1px solid #e8eaed; border-radius: 12px; overflow: hidden; }
+  .kp-image { height: 200px; background: linear-gradient(135deg, #2c1810 0%, #5c3d2e 50%, #8b5e3c 100%); display: flex; align-items: center; justify-content: center; position: relative; }
+  .kp-image svg { width: 80px; height: 80px; opacity: 0.6; }
+  .kp-image-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
+  .kp-body { padding: 16px; }
+  .kp-name { font-size: 22px; font-weight: 400; margin-bottom: 4px; }
+  .kp-category { font-size: 13px; color: #70757a; margin-bottom: 10px; }
+  .kp-rating-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .kp-score { font-size: 20px; font-weight: 500; color: #202124; }
+  .stars { color: #fbbc04; letter-spacing: 2px; font-size: 14px; }
+  .review-count { font-size: 13px; color: #1a73e8; cursor: pointer; }
+  .kp-info { border-top: 1px solid #e8eaed; padding-top: 12px; }
+  .kp-info-row { display: flex; align-items: flex-start; gap: 12px; padding: 6px 0; font-size: 13px; color: #202124; }
+  .kp-info-icon { color: #70757a; font-size: 16px; width: 20px; flex-shrink: 0; }
+  .open-badge { color: #137333; font-weight: 500; }
+  .hours-expand { color: #1a73e8; cursor: pointer; margin-left: 6px; font-size: 12px; }
+
+  /* Reviews section */
+  .reviews-section { flex: 1; }
+  .reviews-header { font-size: 20px; font-weight: 400; margin-bottom: 16px; color: #202124; }
+  .rating-summary { display: flex; gap: 20px; align-items: center; margin-bottom: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; }
+  .big-score { font-size: 48px; font-weight: 300; line-height: 1; }
+  .breakdown { flex: 1; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; color: #70757a; }
+  .bar-track { flex: 1; height: 8px; background: #e8eaed; border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: #fbbc04; border-radius: 4px; }
+
+  /* Filter chips */
+  .filter-chips { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .chip { padding: 6px 14px; border: 1px solid #e8eaed; border-radius: 16px; font-size: 13px; color: #202124; cursor: pointer; background: #fff; transition: all 0.2s; }
+  .chip:hover { background: #f1f3f4; }
+  .chip.active { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; }
+
+  /* Review cards */
+  .review-card { border-bottom: 1px solid #e8eaed; padding: 16px 0; }
+  .review-card.highlighted { background: rgba(34,197,94,0.06); border-radius: 8px; padding: 12px; margin: 0 -12px; border-bottom: none; margin-bottom: 4px; }
+  .reviewer-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .reviewer-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px; color: #fff; flex-shrink: 0; }
+  .reviewer-name { font-size: 14px; font-weight: 500; }
+  .reviewer-meta { font-size: 12px; color: #70757a; }
+  .review-stars { color: #fbbc04; font-size: 13px; margin-bottom: 6px; }
+  .review-date { font-size: 12px; color: #70757a; margin-left: 8px; }
+  .review-text { font-size: 14px; color: #202124; line-height: 1.6; }
+  .review-more { color: #1a73e8; cursor: pointer; font-size: 13px; }
+  .helpful-row { margin-top: 8px; font-size: 12px; color: #70757a; }
+  .helpful-btn { color: #1a73e8; cursor: pointer; margin-left: 8px; }
+</style>
+</head>
+<body>
+
+<div class="gbar">
+  <div class="g-logo">G<span class="o">o</span>o<span class="l">g</span><span class="e">l</span>e</div>
+  <div class="search-input">
+    <input type="text" value="Blue Bottle Coffee Mission San Francisco reviews">
+    <span style="color:#70757a;">🔍</span>
+  </div>
+  <div class="nav-icons">
+    <span>Maps</span>
+    <span>Images</span>
+    <div class="avatar">A</div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Knowledge Panel -->
+  <div class="knowledge-panel">
+    <div class="kp-card">
+      <div class="kp-image">
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="30" y="40" width="40" height="45" rx="4" fill="#8b5e3c"/>
+          <path d="M30 50 Q20 50 20 60 Q20 70 30 70" stroke="#8b5e3c" stroke-width="6" fill="none"/>
+          <rect x="35" y="20" width="30" height="8" rx="4" fill="#d4a96a"/>
+          <ellipse cx="50" cy="25" rx="15" ry="8" fill="none" stroke="#d4a96a" stroke-width="3"/>
+        </svg>
+        <span class="kp-image-label">📍 Mission District</span>
+      </div>
+      <div class="kp-body">
+        <div class="kp-name">Blue Bottle Coffee</div>
+        <div class="kp-category">Coffee shop · Mission District</div>
+        <div class="kp-rating-row">
+          <span class="kp-score">4.5</span>
+          <span class="stars">★★★★★</span>
+          <span class="review-count">2,841 reviews</span>
+        </div>
+        <div class="kp-info">
+          <div class="kp-info-row">
+            <span class="kp-info-icon">🕐</span>
+            <div><span class="open-badge">Open ·</span> Closes 6 PM <span class="hours-expand">▾</span></div>
+          </div>
+          <div class="kp-info-row">
+            <span class="kp-info-icon">📍</span>
+            <div>315 Linden St, San Francisco, CA 94102</div>
+          </div>
+          <div class="kp-info-row">
+            <span class="kp-info-icon">📞</span>
+            <div>(415) 653-3394</div>
+          </div>
+          <div class="kp-info-row">
+            <span class="kp-info-icon">🌐</span>
+            <div><a href="#" style="color:#1a73e8;">bluebottlecoffee.com</a></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reviews -->
+  <div class="reviews-section">
+    <div class="reviews-header">Customer Reviews</div>
+
+    <div class="rating-summary">
+      <div>
+        <div class="big-score">4.5</div>
+        <div class="stars" style="font-size:18px;">★★★★★</div>
+        <div style="font-size:12px; color:#70757a; margin-top:4px;">2,841 reviews</div>
+      </div>
+      <div class="breakdown">
+        <div class="bar-row"><span style="width:16px;">5</span><div class="bar-track"><div class="bar-fill" style="width:68%"></div></div><span>68%</span></div>
+        <div class="bar-row"><span style="width:16px;">4</span><div class="bar-track"><div class="bar-fill" style="width:18%"></div></div><span>18%</span></div>
+        <div class="bar-row"><span style="width:16px;">3</span><div class="bar-track"><div class="bar-fill" style="width:8%"></div></div><span>8%</span></div>
+        <div class="bar-row"><span style="width:16px;">2</span><div class="bar-track"><div class="bar-fill" style="width:3%"></div></div><span>3%</span></div>
+        <div class="bar-row"><span style="width:16px;">1</span><div class="bar-track"><div class="bar-fill" style="width:3%"></div></div><span>3%</span></div>
+      </div>
+    </div>
+
+    <div class="filter-chips">
+      <div class="chip active">Most Recent</div>
+      <div class="chip">Highest Rated</div>
+      <div class="chip">Lowest Rated</div>
+      <div class="chip">With Photos</div>
+    </div>
+
+    <div id="reviews-list"></div>
+  </div>
+</div>
+
+<script>
+const reviews = [
+  { name: "Sarah M.", initial: "S", color: "#4285f4", stars: 5, date: "2 days ago", local: "Local Guide · 47 reviews", text: "Absolutely one of the best coffee experiences in the Mission. The single-origin Ethiopian pour-over was exceptional — floral, bright, and incredibly clean. Staff were knowledgeable without being pretentious. The space has a calm, neighborhood feel. Will be back weekly." },
+  { name: "James T.", initial: "J", color: "#34a853", stars: 5, date: "4 days ago", local: "38 reviews", text: "Blue Bottle consistently nails the balance between quality and approachability. Tried the iced New Orleans today and it's exactly how coffee should taste — bold, not bitter, a little sweet. The Linden St location has great natural light and a perfect work vibe in the mornings." },
+  { name: "Priya K.", initial: "P", color: "#ea4335", stars: 4, date: "1 week ago", local: "Local Guide · 112 reviews", text: "Great coffee, slightly on the pricier side but you can taste the care that goes into sourcing. The seasonal latte was delightful. Only minor gripe: wait time gets long on weekends around 10am. Weekday mornings are much more relaxed. Definitely recommend the Bella Donovan blend." },
+  { name: "Marcus W.", initial: "M", color: "#9c27b0", stars: 5, date: "1 week ago", local: "22 reviews", text: "I've been a Blue Bottle regular for 3 years and the Mission location is my favorite. The baristas remember regulars, the beans are consistently fresh, and they never rush you. Brought a client here last Tuesday and they immediately asked for the address to send their team." },
+  { name: "Anna L.", initial: "A", color: "#ff5722", stars: 4, date: "2 weeks ago", local: "Local Guide · 89 reviews", text: "Solid 4 stars. The coffee quality is genuinely impressive — you can taste the difference compared to chains. The space is a bit cramped during peak hours, and wifi is spotty, but if you're coming for the coffee itself, this is as good as it gets in the neighborhood." },
+];
+
+const list = document.getElementById('reviews-list');
+reviews.forEach(r => {
+  list.innerHTML += `
+    <div class="review-card" data-reviewer="${r.name}">
+      <div class="reviewer-row">
+        <div class="reviewer-avatar" style="background:${r.color};">${r.initial}</div>
+        <div>
+          <div class="reviewer-name">${r.name}</div>
+          <div class="reviewer-meta">${r.local}</div>
+        </div>
+      </div>
+      <div>
+        <span class="review-stars">${'★'.repeat(r.stars)}${'☆'.repeat(5-r.stars)}</span>
+        <span class="review-date">${r.date}</span>
+      </div>
+      <div class="review-text">${r.text}</div>
+      <div class="helpful-row">Helpful? <span class="helpful-btn">👍 Yes</span> <span class="helpful-btn">👎 No</span></div>
+    </div>
+  `;
+});
+</script>
+</body>
+</html>

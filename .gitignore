@@ -5,9 +5,12 @@ jspm_packages/
 # Build outputs
 *.tsbuildinfo
 foundationAgent.js.map
+dist/
 
 # Local configuration and state files
 stanley_session_state.json
+session_state.json
+runs.json
 *.log
 .DS_Store
 Thumbs.db

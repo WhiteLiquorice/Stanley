@@ -1,0 +1,18 @@
+[
+  {
+    "id": "1",
+    "name": "Slack Token",
+    "value": "xoxb-mock-token-12345",
+    "type": "Bot Token",
+    "expires": "Never",
+    "status": "Active"
+  },
+  {
+    "id": "2",
+    "name": "Google API Key",
+    "value": "AIzaSyMockKey-xyz",
+    "type": "API Key",
+    "expires": "Never",
+    "status": "Active"
+  }
+]

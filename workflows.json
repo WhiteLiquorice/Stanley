@@ -1,0 +1,67 @@
+[
+  {
+    "id": "1",
+    "name": "Google Search Automation",
+    "nodes": [
+      {
+        "id": "1",
+        "type": "trigger",
+        "label": "Start Trigger",
+        "data": {
+          "url": "https://www.google.com"
+        }
+      },
+      {
+        "id": "2",
+        "type": "type",
+        "label": "Enter Query",
+        "data": {
+          "selector": "textarea[name=\"q\"]",
+          "value": "Project Stanley enterprise automation"
+        }
+      },
+      {
+        "id": "3",
+        "type": "click",
+        "label": "Submit Search",
+        "data": {
+          "selector": "input[name=\"btnK\"]"
+        }
+      },
+      {
+        "id": "4",
+        "type": "wait",
+        "label": "Wait for Results",
+        "data": {
+          "ms": "3000"
+        }
+      },
+      {
+        "id": "5",
+        "type": "scrape",
+        "label": "Scrape Text",
+        "data": {
+          "selector": "#search"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "1",
+        "target": "2"
+      },
+      {
+        "source": "2",
+        "target": "3"
+      },
+      {
+        "source": "3",
+        "target": "4"
+      },
+      {
+        "source": "4",
+        "target": "5"
+      }
+    ]
+  }
+]

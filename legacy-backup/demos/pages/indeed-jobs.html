@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>UX Designer Remote Jobs - Indeed</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; background: #f3f2f1; color: #2d2d2d; }
+
+  /* Header */
+  header { background: #fff; border-bottom: 1px solid #d4d2d0; padding: 12px 24px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
+  .logo { font-size: 28px; font-weight: 900; color: #003A9B; letter-spacing: -1px; }
+  .logo span { color: #F12A27; }
+  .search-bar { display: flex; flex: 1; gap: 0; border: 2px solid #003A9B; border-radius: 8px; overflow: hidden; }
+  .search-bar input { flex: 1; padding: 10px 14px; border: none; outline: none; font-size: 14px; }
+  .search-bar .divider { width: 1px; background: #d4d2d0; }
+  .search-bar button { background: #2164F3; color: #fff; border: none; padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; }
+
+  /* Layout */
+  .layout { display: flex; max-width: 1200px; margin: 0 auto; padding: 20px 16px; gap: 20px; }
+
+  /* Sidebar filters */
+  .sidebar { width: 260px; flex-shrink: 0; }
+  .filter-card { background: #fff; border: 1px solid #d4d2d0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .filter-card h3 { font-size: 13px; font-weight: 700; color: #2d2d2d; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .filter-option { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-size: 13px; color: #2d2d2d; }
+  .filter-option input { accent-color: #2164F3; }
+  .filter-count { color: #767676; font-size: 12px; margin-left: auto; }
+
+  /* Results panel */
+  .results { flex: 1; }
+  .results-header { font-size: 14px; color: #767676; margin-bottom: 12px; }
+  .results-header strong { color: #2d2d2d; }
+
+  .job-card { background: #fff; border: 1px solid #d4d2d0; border-radius: 8px; padding: 18px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; }
+  .job-card:hover, .job-card.active { border-color: #2164F3; box-shadow: 0 0 0 1px #2164F3; }
+  .job-card.highlighted { background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.6); }
+  .job-title { font-size: 16px; font-weight: 600; color: #2164F3; margin-bottom: 4px; }
+  .company { font-size: 14px; color: #2d2d2d; margin-bottom: 2px; }
+  .location { font-size: 13px; color: #767676; margin-bottom: 8px; }
+  .location .remote-badge { background: #E8F0FE; color: #1a5276; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 3px; margin-left: 6px; }
+  .salary { font-size: 14px; font-weight: 600; color: #2d2d2d; margin-bottom: 8px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tag { background: #f3f2f1; border: 1px solid #d4d2d0; border-radius: 4px; padding: 3px 8px; font-size: 12px; color: #2d2d2d; }
+  .meta { font-size: 12px; color: #767676; display: flex; gap: 12px; }
+  .new-badge { color: #2164F3; font-weight: 700; }
+
+  .pagination { display: flex; justify-content: center; gap: 4px; margin-top: 20px; }
+  .pagination a { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; font-size: 13px; color: #2164F3; text-decoration: none; }
+  .pagination a.current { background: #2164F3; color: #fff; }
+  .pagination a:hover:not(.current) { background: #f3f2f1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">in<span>deed</span></div>
+  <div class="search-bar">
+    <input type="text" value="UX Designer" placeholder="Job title, keywords, or company">
+    <div class="divider"></div>
+    <input type="text" value="Remote" placeholder="City, state, zip, or remote" style="max-width:200px;">
+    <button>Find jobs</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="filter-card">
+      <h3>Date Posted</h3>
+      <label class="filter-option"><input type="radio" name="date" checked> Any time</label>
+      <label class="filter-option"><input type="radio" name="date"> Last 24 hours <span class="filter-count">12</span></label>
+      <label class="filter-option"><input type="radio" name="date"> Last 3 days <span class="filter-count">31</span></label>
+      <label class="filter-option"><input type="radio" name="date"> Last 7 days <span class="filter-count">89</span></label>
+    </div>
+    <div class="filter-card">
+      <h3>Experience Level</h3>
+      <label class="filter-option"><input type="checkbox" checked> Mid-level <span class="filter-count">143</span></label>
+      <label class="filter-option"><input type="checkbox"> Senior <span class="filter-count">98</span></label>
+      <label class="filter-option"><input type="checkbox"> Entry level <span class="filter-count">34</span></label>
+    </div>
+    <div class="filter-card">
+      <h3>Salary Estimate</h3>
+      <label class="filter-option"><input type="checkbox"> $80,000+ <span class="filter-count">201</span></label>
+      <label class="filter-option"><input type="checkbox" checked> $100,000+ <span class="filter-count">167</span></label>
+      <label class="filter-option"><input type="checkbox"> $120,000+ <span class="filter-count">89</span></label>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results">
+    <div class="results-header"><strong>2,847 jobs</strong> matching "UX Designer" in Remote</div>
+
+    <div id="job-list"></div>
+
+    <div class="pagination">
+      <a href="#" class="current">1</a>
+      <a href="#">2</a>
+      <a href="#">3</a>
+      <a href="#">4</a>
+      <a href="#">5</a>
+      <a href="#">...</a>
+      <a href="#">Next →</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const jobs = [
+  { title: "Senior UX Designer — Design Systems", company: "Stripe", location: "Remote", salary: "$130,000 – $165,000 a year", tags: ["Full-time", "Design Systems", "Figma"], posted: "2 days ago", badge: true },
+  { title: "UX Designer, Growth & Onboarding", company: "Notion", location: "Remote (US)", salary: "$115,000 – $145,000 a year", tags: ["Full-time", "B2B SaaS", "User Research"], posted: "1 day ago", badge: true },
+  { title: "Product UX Designer — Mobile", company: "Robinhood", location: "Remote — United States", salary: "$120,000 – $150,000 a year", tags: ["Full-time", "Mobile", "iOS/Android"], posted: "3 days ago", badge: false },
+  { title: "UX Designer II, Platform Experience", company: "Shopify", location: "Remote — North America", salary: "$105,000 – $135,000 a year", tags: ["Full-time", "Ecommerce", "Prototyping"], posted: "4 days ago", badge: false },
+  { title: "Mid-Level UX Designer, Data Visualization", company: "Palantir Technologies", location: "Remote", salary: "$110,000 – $140,000 a year", tags: ["Full-time", "Data Viz", "Enterprise"], posted: "2 days ago", badge: false },
+  { title: "UX Designer — AI Products", company: "Anthropic", location: "Remote — US/Canada", salary: "$125,000 – $160,000 a year", tags: ["Full-time", "AI", "LLMs"], posted: "Today", badge: true },
+  { title: "UX/UI Designer, Consumer Apps", company: "Pinterest", location: "Remote", salary: "$100,000 – $130,000 a year", tags: ["Full-time", "Consumer", "Visual Design"], posted: "5 days ago", badge: false },
+  { title: "Senior UX Designer — B2B Dashboard", company: "Salesforce", location: "Remote (US)", salary: "$135,000 – $170,000 a year", tags: ["Full-time", "CRM", "Complex UX"], posted: "1 day ago", badge: true },
+];
+
+const list = document.getElementById('job-list');
+jobs.forEach((j, i) => {
+  const card = document.createElement('div');
+  card.className = 'job-card';
+  card.id = `job-${i}`;
+  card.innerHTML = `
+    <div class="job-title">${j.title}</div>
+    <div class="company">${j.company}</div>
+    <div class="location">${j.location} <span class="remote-badge">Remote</span></div>
+    <div class="salary">${j.salary}</div>
+    <div class="tags">${j.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+    <div class="meta">
+      <span>${j.posted}</span>
+      ${j.badge ? '<span class="new-badge">✦ Easily Apply</span>' : ''}
+    </div>
+  `;
+  list.appendChild(card);
+});
+</script>
+</body>
+</html>

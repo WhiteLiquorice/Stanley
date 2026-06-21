@@ -1,0 +1,172 @@
+{
+  "videos": [
+    {
+      "input": "01-morning-briefing.webm",
+      "output": "reel-01-morning-briefing.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "How I get my morning tech briefing without opening a single tab."
+        },
+        {
+          "start": 7.5,
+          "end": 25,
+          "speed": 4,
+          "note": "Stanley scanning Hacker News - headlines, scores, comments..."
+        },
+        {
+          "start": 25,
+          "end": 99,
+          "speed": 1,
+          "note": "10 top stories. Saved. Ready to read. 4 seconds."
+        }
+      ]
+    },
+    {
+      "input": "02-price-tracker.webm",
+      "output": "reel-02-price-tracker.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "Stop refreshing Amazon waiting for a price drop. Let Stanley watch it."
+        },
+        {
+          "start": 7.5,
+          "end": 24,
+          "speed": 4,
+          "note": "Scanning listing - current price, original price, savings badge..."
+        },
+        {
+          "start": 24,
+          "end": 99,
+          "speed": 1,
+          "note": "Price logged at $279.99. $70 off list. Watchlist updated."
+        }
+      ]
+    },
+    {
+      "input": "03-job-hunt.webm",
+      "output": "reel-03-job-hunt.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "Stop manually filtering job boards every morning. This alone takes hours."
+        },
+        {
+          "start": 7.5,
+          "end": 25,
+          "speed": 4,
+          "note": "Sweeping Indeed for remote UX Designer roles with salaries listed..."
+        },
+        {
+          "start": 25,
+          "end": 99,
+          "speed": 1,
+          "note": "8 positions saved. Titles, companies, salary ranges - all captured."
+        }
+      ]
+    },
+    {
+      "input": "04-competitor-pulse.webm",
+      "output": "reel-04-competitor-pulse.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "I used to check 3 competitor pricing pages every week by hand."
+        },
+        {
+          "start": 7.5,
+          "end": 23,
+          "speed": 4,
+          "note": "Extracting team plan pricing from Monday, Asana, and Notion..."
+        },
+        {
+          "start": 23,
+          "end": 99,
+          "speed": 1,
+          "note": "Monday wins by $1.99/seat. $597/yr saved at 25 seats. Logged."
+        }
+      ]
+    },
+    {
+      "input": "05-review-monitor.webm",
+      "output": "reel-05-review-monitor.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "5 new Google reviews came in overnight. Stanley caught all of them."
+        },
+        {
+          "start": 7.5,
+          "end": 24.5,
+          "speed": 3.5,
+          "note": "Scanning Maps listing - rating, reviewer names, and full review text..."
+        },
+        {
+          "start": 24.5,
+          "end": 99,
+          "speed": 1,
+          "note": "5 reviews saved with star ratings. Negative feedback flagged."
+        }
+      ]
+    },
+    {
+      "input": "06-form-autopilot.webm",
+      "output": "reel-06-form-autopilot.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "I fill out this exact same 9-field form every single week. Not anymore."
+        },
+        {
+          "start": 7.5,
+          "end": 28,
+          "speed": 5,
+          "note": "Stanley filling vendor timesheet - name, ID, project code, hours, description..."
+        },
+        {
+          "start": 28,
+          "end": 99,
+          "speed": 1,
+          "note": "Submitted. Confirmation logged. Took under 5 seconds."
+        }
+      ]
+    },
+    {
+      "input": "07-lead-research.webm",
+      "output": "reel-07-lead-research.mp4",
+      "cuts": [
+        {
+          "start": 0,
+          "end": 7.5,
+          "speed": 1,
+          "note": "Before every outbound email I run the same company research checklist."
+        },
+        {
+          "start": 7.5,
+          "end": 23,
+          "speed": 4,
+          "note": "Scanning Wikipedia infobox - founding year, HQ, CEO, leadership..."
+        },
+        {
+          "start": 23,
+          "end": 99,
+          "speed": 1,
+          "note": "Company profile built. Ready for outreach. One prompt, done."
+        }
+      ]
+    }
+  ]
+}

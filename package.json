@@ -1,16 +1,31 @@
 {
-  "name": "project-stanley",
+  "name": "project-stanley-enterprise",
   "version": "1.0.0",
-  "description": "Project Stanley - Local Browser Butler Automation Framework",
-  "main": "foundationAgent.js",
+  "description": "Project Stanley - Enterprise Browser Automation Suite",
+  "main": "server.js",
   "scripts": {
-    "build": "tsc"
+    "dev:frontend": "vite",
+    "dev:backend": "node server.js",
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "build": "tsc -b && vite build",
+    "start": "node server.js"
   },
   "dependencies": {
-    "playwright": "^1.42.1"
+    "playwright": "^1.42.1",
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "lucide-react": "^1.21.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-router-dom": "^7.18.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.5",
-    "@types/node": "^20.12.7"
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^8.2.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
   }
 }
