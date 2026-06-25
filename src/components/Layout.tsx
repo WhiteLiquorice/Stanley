@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, KeyRound, Network, Settings, Search, Bell, LogOut } from 'lucide-react';
+import { Activity, KeyRound, Network, Settings, Search, Bell, LogOut, CreditCard } from 'lucide-react';
 import './Layout.css'; // We'll create a small css file for layout specifics
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -44,7 +44,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         
-        <div className="sidebar-footer" style={{ marginTop: 'auto', padding: '16px' }}>
+        <div className="sidebar-footer" style={{ marginTop: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <a 
+            href="https://billing.stripe.com/p/login/00w9AU7JV3yBdzZdNo3cc00"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item"
+            style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '12px' }}
+          >
+            <CreditCard size={20} />
+            <span>Manage Billing</span>
+          </a>
           <button onClick={handleSignOut} className="nav-item" style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--error, #ef4444)' }}>
             <LogOut size={20} />
             <span>Sign Out</span>
