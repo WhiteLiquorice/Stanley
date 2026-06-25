@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Setup Your Stanley Account</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            heading: ['Outfit', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#22c55e',
+              600: '#16a34a',
+            },
+            accent: {
+              500: '#06b6d4',
+            },
+            darkbg: {
+              900: '#030712',
+              800: '#0b0f19',
+              700: '#1f2937',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Firebase App & Services Compat CDN -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <style>
+    .glass-card {
+      background: rgba(11, 15, 25, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+  </style>
+</head>
+<body class="bg-darkbg-900 text-gray-100 font-sans selection:bg-brand-500/30 min-h-screen flex items-center justify-center p-6 relative overflow-x-hidden">
+
+  <!-- Glow effects -->
+  <div class="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-brand-500/10 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+  <div class="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-accent-500/10 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+
+  <div class="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch relative z-10">
+    
+    <!-- Left Panel: Download Assets -->
+    <div class="glass-card p-8 rounded-3xl flex flex-col justify-between border border-white/10 shadow-2xl">
+      <div>
+        <div class="flex items-center gap-3 mb-6">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-500 to-accent-500 flex items-center justify-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-darkbg-900" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1-5.5v3h-2v-3h2zm-4 7l3 3.5 3-3.5h-6zM5 8.5L12 12l7-3.5V7H5v1.5z" />
+            </svg>
+          </div>
+          <span class="font-heading font-extrabold text-xl tracking-wide">STANLEY SETUP</span>
+        </div>
+        
+        <h2 class="font-heading font-black text-2xl md:text-3xl text-white mb-3 leading-tight">Thank you for your purchase!</h2>
+        <p class="text-gray-400 text-sm mb-8">
+          Download your local browser automation butler files below. Keep them in a safe workspace folder.
+        </p>
+
+        <!-- Download Buttons -->
+        <div class="flex flex-col gap-4">
+          <!-- Windows App -->
+          <a href="stanley-daemon.exe" download class="p-4 rounded-2xl bg-white/5 border border-white/10 hover:border-brand-500/30 flex items-center gap-4 group transition-all">
+            <div class="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 group-hover:scale-105 transition-transform">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 16v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1M12 4v12M8 12l4 4 4-4"/>
+              </svg>
+            </div>
+            <div class="text-left">
+              <div class="text-white font-semibold text-sm">Windows Desktop Host (.exe)</div>
+              <div class="text-xs text-gray-500">Packaged daemon installer wrapper</div>
+            </div>
+          </a>
+
+          <!-- Web Extension -->
+          <a href="stanley-extension.zip" download class="p-4 rounded-2xl bg-white/5 border border-white/10 hover:border-brand-500/30 flex items-center gap-4 group transition-all">
+            <div class="w-12 h-12 rounded-xl bg-accent-500/10 flex items-center justify-center text-accent-500 group-hover:scale-105 transition-transform">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+            </div>
+            <div class="text-left">
+              <div class="text-white font-semibold text-sm">Chrome Extension package (.zip)</div>
+              <div class="text-xs text-gray-500">Load unpacked in Developer Mode</div>
+            </div>
+          </a>
+        </div>
+      </div>
+      
+      <!-- Detailed Setup Instructions -->
+      <div class="mt-8 pt-6 border-t border-white/5 text-left">
+        <h4 class="text-white font-bold text-sm mb-3">Easy Setup Instructions</h4>
+        
+        <ol class="space-y-3.5 text-xs text-gray-400">
+          <li class="flex gap-2">
+            <span class="text-brand-500 font-bold">1.</span>
+            <div>
+              <strong class="text-gray-300 block">Extract the Extension ZIP</strong>
+              Find <code class="text-accent-500 bg-white/5 px-1 rounded">stanley-extension.zip</code> in your downloads. Right-click the file and select <span class="text-white font-medium">Extract All</span> (or "Unzip") to create a normal folder.
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="text-brand-500 font-bold">2.</span>
+            <div>
+              <strong class="text-gray-300 block">Open Chrome Extensions Settings</strong>
+              Open a new tab in Google Chrome, type <code class="text-accent-500 bg-white/5 px-1 rounded">chrome://extensions</code> into the address bar, and press Enter.
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="text-brand-500 font-bold">3.</span>
+            <div>
+              <strong class="text-gray-300 block">Enable Developer Mode</strong>
+              Flick the switch labeled <span class="text-white font-medium">Developer mode</span> in the top-right corner of the Extensions page.
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="text-brand-500 font-bold">4.</span>
+            <div>
+              <strong class="text-gray-300 block">Load Unpacked Extension</strong>
+              Click the <span class="text-white font-medium">Load unpacked</span> button in the top-left corner. Select the unzipped folder you created in Step 1.
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="text-brand-500 font-bold">5.</span>
+            <div>
+              <strong class="text-gray-300 block">Run the Windows Desktop Host</strong>
+              Double-click <code class="text-accent-500 bg-white/5 px-1 rounded">stanley-daemon.exe</code>. A terminal wrapper window will flash and register the host connection in the background.
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+    
+    <!-- Right Panel: Firebase Account Registration -->
+    <div class="glass-card p-8 rounded-3xl border border-white/10 shadow-2xl flex flex-col justify-center">
+      <h3 class="font-heading font-black text-2xl text-white mb-2">Create Your Account</h3>
+      <p class="text-gray-400 text-sm mb-6">Create the credentials you'll use to activate Stanley in your extension.</p>
+      
+      <form id="signup-form" class="space-y-4">
+        <!-- Email -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2" for="email">Email Address</label>
+          <input id="email" type="email" required placeholder="name@domain.com" class="w-full bg-black/30 border border-white/10 focus:border-brand-500/50 rounded-xl px-4 py-3 text-sm text-white outline-none transition-all">
+        </div>
+        
+        <!-- Password -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2" for="password">Password</label>
+          <input id="password" type="password" required minlength="6" placeholder="••••••••" class="w-full bg-black/30 border border-white/10 focus:border-brand-500/50 rounded-xl px-4 py-3 text-sm text-white outline-none transition-all">
+        </div>
+        
+        <!-- Button -->
+        <button type="submit" id="submit-btn" class="w-full py-3.5 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-500 text-darkbg-900 font-bold rounded-xl transition-all shadow-md shadow-brand-500/20">
+          Register Account
+        </button>
+
+        <!-- Output message status -->
+        <div id="status-message" class="text-sm mt-3 text-center hidden"></div>
+      </form>
+    </div>
+
+  </div>
+
+  <script>
+    // Firebase Web Configurations (Replaced with your project details)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAs-PlaceholderApiKeyGoesHere",
+      authDomain: "bridgeway-db29e.firebaseapp.com",
+      projectId: "bridgeway-db29e",
+      storageBucket: "bridgeway-db29e.appspot.com",
+      messagingSenderId: "53861905686",
+      appId: "1:53861905686:web:7f61765c71ab5e807dfd80"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    const form = document.getElementById('signup-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const statusMsg = document.getElementById('status-message');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      statusMsg.className = "text-sm mt-3 text-center text-cyan-400";
+      statusMsg.textContent = "Registering user credentials...";
+      statusMsg.classList.remove('hidden');
+      submitBtn.disabled = true;
+
+      try {
+        const cleanEmail = email.toLowerCase();
+        
+        // Create user in Firebase Auth
+        const cred = await auth.createUserWithEmailAndPassword(email, password);
+        const user = cred.user;
+
+        // Write user details to Firestore as Active directly
+        const userPayload = {
+          email: cleanEmail,
+          status: 'active',
+          paid: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        await db.collection('users').doc(user.uid).set(userPayload);
+
+        statusMsg.className = "text-sm mt-3 text-center text-brand-500 font-semibold";
+        statusMsg.textContent = "Paid Account Activated! You may now log in to the extension.";
+        form.reset();
+      } catch (err) {
+        console.error(err);
+        statusMsg.className = "text-sm mt-3 text-center text-red-500";
+        statusMsg.textContent = "Registration Failed: " + err.message;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

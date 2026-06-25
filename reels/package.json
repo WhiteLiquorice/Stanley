@@ -1,0 +1,24 @@
+{
+  "name": "stanley-reels",
+  "version": "1.0.0",
+  "description": "Automated ad and reel generation for Stanley",
+  "main": "Orchestrator.js",
+  "scripts": {
+    "start": "remotion preview src/index.tsx",
+    "render": "remotion render src/index.tsx StanleyAd out.mp4",
+    "orchestrate": "node Orchestrator.js"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.228",
+    "@remotion/google-fonts": "^4.0.228"
+  },
+  "devDependencies": {
+    "@remotion/cli": "^4.0.228",
+    "@types/node": "^20.11.24",
+    "@types/react": "^18.2.61",
+    "@types/react-dom": "^18.2.19",
+    "typescript": "^5.3.3"
+  }
+}

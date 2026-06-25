@@ -1,0 +1,84 @@
+<!DOCTYPE html><link rel="stylesheet" href="/_astro/2026-06-18-best-scheduling-systems-for-cosmetic-medical-practices.78bQxqEN.css"><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Project Stanley",
+  "operatingSystem": "Windows, macOS, Linux",
+  "applicationCategory": "DeveloperApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+<p><strong>Meta Description:</strong> Master the art of scraping dynamic websites. Learn how Project Stanley uses Playwright workflows, session state management, and network sniffing to bypass anti-bot measures like Cloudflare and device fingerprinting.</p>
+<p>Project Stanley does <strong>injects stealth attributes into Chromium contexts</strong> to solve <strong>Cloudflare WAF challenges</strong> and <strong>device fingerprint detection</strong>. The <code>foundationAgent.ts</code> class manages non-headless browser lifecycles, persisting session states from <code>.env</code> storage paths when restarting automation runs. Network sniffing utilities capture backend JSON payloads directly through Playwright request listeners to bypass API decryption layers.</p>
+<h2 id="anti-bot-evasion--stealth-configuration">Anti-Bot Evasion &#x26; Stealth Configuration</h2>
+<p>The primary failure point in standard web scraping is the inability to mimic legitimate user agents while maintaining browser integrity. Project Stanley addresses this by disabling Blink features that allow automated control detection and masking the webdriver attribute exposed by Node.js environments. This configuration lives directly inside the <code>initialize</code> method of <code>StanleyFoundation</code>.</p>
+<p>To evade Cloudflare challenges, the framework launches Chromium with specific arguments rather than defaulting to standard Playwright flags. You must configure your <code>.env</code> file to set <code>STANLEY_HEADLESS=false</code> and inject a realistic User Agent string into the browser context.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#6A737D">// foundationAgent.ts - Launch Configuration</span></span>
+<span class="line"><span style="color:#79B8FF">this</span><span style="color:#E1E4E8">.browser </span><span style="color:#F97583">=</span><span style="color:#F97583"> await</span><span style="color:#E1E4E8"> chromium.</span><span style="color:#B392F0">launch</span><span style="color:#E1E4E8">({</span></span>
+<span class="line"><span style="color:#E1E4E8">  headless: </span><span style="color:#79B8FF">this</span><span style="color:#E1E4E8">.config.headless, </span><span style="color:#6A737D">// Use configured headful mode</span></span>
+<span class="line"><span style="color:#E1E4E8">  args: [</span></span>
+<span class="line"><span style="color:#9ECBFF">    '--disable-blink-features=AutomationControlled'</span><span style="color:#E1E4E8">, </span></span>
+<span class="line"><span style="color:#9ECBFF">    '--no-sandbox'</span></span>
+<span class="line"><span style="color:#E1E4E8">  ]</span></span>
+<span class="line"><span style="color:#E1E4E8">});</span></span>
+<span class="line"></span></code></pre>
+<p>Additionally, the framework injects a global script to override the <code>navigator.webdriver</code> property, returning <code>undefined</code>. This prevents automated browser detection heuristics from flagging your session as non-human.</p>
+<h2 id="session-state-management-for-persistent-access">Session State Management for Persistent Access</h2>
+<p>Repeated authentication is often the bottleneck in high-frequency scraping tasks. Standard Playwright sessions require full re-initialization on restart, but Project Stanley utilizes persistent state management to restore cookies and storage data without manual intervention. The <code>statePath</code> configuration within <code>AgentConfig</code> points to a local JSON file located in your working directory.</p>
+<p>If the session exists, <code>initialize()</code> reads this file and restores the context options automatically. This allows you to resume complex workflows like extracting customer data tables from legacy directories (e.g., Mindbody) without losing authentication tokens.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#6A737D">// foundationAgent.ts - State Restoration Logic</span></span>
+<span class="line"><span style="color:#F97583">const</span><span style="color:#79B8FF"> stateText</span><span style="color:#F97583"> =</span><span style="color:#E1E4E8"> fs.</span><span style="color:#B392F0">readFileSync</span><span style="color:#E1E4E8">(</span><span style="color:#79B8FF">this</span><span style="color:#E1E4E8">.config.statePath, </span><span style="color:#9ECBFF">'utf-8'</span><span style="color:#E1E4E8">);</span></span>
+<span class="line"><span style="color:#E1E4E8">contextOptions.storageState </span><span style="color:#F97583">=</span><span style="color:#79B8FF"> JSON</span><span style="color:#E1E4E8">.</span><span style="color:#B392F0">parse</span><span style="color:#E1E4E8">(stateText);</span></span>
+<span class="line"></span></code></pre>
+<h2 id="headless-automation--dom-event-logging">Headless Automation &#x26; DOM Event Logging</h2>
+<p>While you may run headful mode to solve CAPTCHAs or MFA challenges, the core automation logic relies on precise event logging. The <code>StanleyFoundation</code> class exposes a custom function <code>logStanleyEvent</code> via <code>page.exposeFunction</code>. This allows the framework to capture interaction details—selectors, values, and text content—into an internal timeline array rather than relying on browser dev tools.</p>
+<p>This mechanism enables the <code>Onboarding/onboardingAgent.ts</code> module to record visual layout analysis and programmatic access tree mapping accurately. By injecting a global DOM event listener script before navigation, the framework ensures that user-like interactions are logged even during automated session recovery.</p>
+<h2 id="network-sniffing-for-api-payload-extraction">Network Sniffing for API Payload Extraction</h2>
+<p>Static scraping often fails against modern Single Page Applications (SPAs) where data resides in encrypted JSON back-ends. Project Stanley bypasses this through <code>networkSniffer.ts</code>, which launches Playwright in headful mode and attaches request/response listeners to intercept all Fetch/XHR operations. This utility dumps paywalled backend payloads directly, enabling the extraction of logic that client-side rendering hides.</p>
+<p>To implement this, you configure your network listener to capture responses before they are fully rendered on the page. This ensures data integrity for downstream processing without relying on DOM parsing alone.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#6A737D">// skeleton_Key/networkSniffer.ts - Request Interception</span></span>
+<span class="line"><span style="color:#E1E4E8">page.</span><span style="color:#B392F0">on</span><span style="color:#E1E4E8">(</span><span style="color:#9ECBFF">'response'</span><span style="color:#E1E4E8">, </span><span style="color:#F97583">async</span><span style="color:#E1E4E8"> (</span><span style="color:#FFAB70">response</span><span style="color:#E1E4E8">) </span><span style="color:#F97583">=></span><span style="color:#E1E4E8"> {</span></span>
+<span class="line"><span style="color:#6A737D">  // Intercept and dump JSON payloads directly</span></span>
+<span class="line"><span style="color:#E1E4E8">});</span></span>
+<span class="line"></span></code></pre>
+<h2 id="tooling-comparison-matrix">Tooling Comparison Matrix</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th align="left">Feature / Criteria</th><th align="left">Project Stanley</th><th align="left">Manual Crawl Scripts</th><th align="left">Cloud Scraping Platforms</th></tr></thead><tbody><tr><td align="left"><strong>Setup Cost</strong></td><td align="left">Zero Setup / Local Engine</td><td align="left">High developer config hours</td><td align="left">High subscription fees</td></tr><tr><td align="left"><strong>Flakiness Recovery</strong></td><td align="left">Self-healing execution blocks</td><td align="left">None (Fails on DOM changes)</td><td align="left">Retries (Charged per attempt)</td></tr><tr><td align="left"><strong>API Costs</strong></td><td align="left">$0 (Runs locally on localhost)</td><td align="left">$0</td><td align="left">High monthly CPM bills</td></tr><tr><td align="left"><strong>Local Run Option</strong></td><td align="left">Native local daemon</td><td align="left">Local execution</td><td align="left">Cloud-only (No local exports)</td></tr></tbody></table>

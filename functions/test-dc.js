@@ -1,0 +1,1 @@
+const { getDataConnect } = require('firebase-admin/data-connect'); const admin = require('firebase-admin'); admin.initializeApp({projectId: 'bridgeway-apps'}); const dc = getDataConnect({location: 'us-central1', serviceId: 'bridgeway-db'}); dc.executeGraphql('query { orgs { name } }').then(console.log).catch(console.error);

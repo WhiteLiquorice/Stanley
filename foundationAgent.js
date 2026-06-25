@@ -53,6 +53,7 @@ class StanleyFoundation {
     activePageIndex = 0;
     interactionTimeline = [];
     sessionKey;
+    onWorkflowError;
     constructor(config = {}) {
         this.sessionKey = Math.random().toString(36).substring(2, 8);
         this.config = {
@@ -236,7 +237,13 @@ class StanleyFoundation {
     async click(selector) {
         if (!this.page)
             throw new Error("Agent browser session is not initialized.");
-        await this.page.click(selector);
+        try {
+            await this.page.click(selector, { timeout: 3000 });
+        }
+        catch (err) {
+            console.warn(`[StanleyFoundation] Standard click failed, retrying with force: true...`);
+            await this.page.click(selector, { force: true });
+        }
     }
     /**
      * Types text into a target input.
@@ -616,6 +623,107 @@ class StanleyFoundation {
         return this.interactionTimeline;
     }
     /**
+     * Consumes a structured declarative workflow schema, handles the edge-to-edge
+     * linear routing mechanics, and runs the corresponding Playwright browser actions.
+     */
+    async runWorkflow(workflow) {
+        console.log(`[StanleyEngine] Beginning execution for workflow: "${workflow.name}"`);
+        const scrapedData = {};
+        // Find the initial trigger node (node with no incoming edges or type === 'trigger')
+        let currentNode = workflow.nodes.find(n => n.type === 'trigger');
+        if (!currentNode) {
+            throw new Error("[StanleyEngine] Invalid workflow configuration: No 'trigger' node found.");
+        }
+        while (currentNode) {
+            console.log(`[StanleyEngine Step] Executing: [${currentNode.type.toUpperCase()}] "${currentNode.label}"`);
+            // Heuristic security barrier protection check before performing actions
+            const check = await this.isPageBlocked();
+            if (check.blocked) {
+                console.warn(`[StanleyEngine Blocked] ${check.hint}. Pausing for manual client override...`);
+                // Sleep briefly or prompt user in headful mode — allowing manual captcha/MFA resolution
+                await this.wait(5000);
+            }
+            let success = false;
+            let attempts = 0;
+            const maxAttempts = 3;
+            while (!success && attempts < maxAttempts) {
+                try {
+                    switch (currentNode.type) {
+                        case 'trigger':
+                            if (currentNode.data.url) {
+                                await this.navigate(currentNode.data.url);
+                            }
+                            break;
+                        case 'type':
+                            if (currentNode.data.selector && currentNode.data.value !== undefined) {
+                                await this.waitForSelector(currentNode.data.selector, 5000);
+                                await this.type(currentNode.data.selector, currentNode.data.value);
+                            }
+                            break;
+                        case 'click':
+                            if (currentNode.data.selector) {
+                                await this.waitForSelector(currentNode.data.selector, 5000);
+                                await this.click(currentNode.data.selector);
+                            }
+                            break;
+                        case 'wait':
+                            if (currentNode.data.ms) {
+                                const delay = parseInt(currentNode.data.ms, 10);
+                                await this.wait(delay);
+                            }
+                            break;
+                        case 'scrape':
+                            const targetSelector = currentNode.data.selector;
+                            const resultText = await this.scrapeContent(targetSelector);
+                            scrapedData[currentNode.id] = resultText;
+                            console.log(`[StanleyEngine Scrape Complete] Captured content length: ${resultText.length}`);
+                            break;
+                        default:
+                            console.error(`[StanleyEngine] Unknown action step type encountered: ${currentNode.type}`);
+                    }
+                    success = true;
+                }
+                catch (stepError) {
+                    attempts++;
+                    console.warn(`[StanleyEngine Attempt ${attempts} Failed] Action failed for "${currentNode.label || currentNode.type}" (ID: ${currentNode.id}). Error details: ${stepError.message}`);
+                    if (attempts >= maxAttempts) {
+                        console.error(`[StanleyEngine Critical] Action failed after ${maxAttempts} attempts. Halting sequence.`);
+                        // Log clean warning message as requested by the user
+                        console.warn(`[StanleyEngine Prompt] I couldn't find the element "${currentNode.data.selector || 'N/A'}" for step "${currentNode.label}". Did the page change, or should I wait for an input variable?`);
+                        if (this.onWorkflowError) {
+                            const resolution = await this.onWorkflowError(currentNode, stepError);
+                            if (resolution === 'retry') {
+                                console.log(`[StanleyEngine Prompt] User requested retry. Restarting step execution...`);
+                                attempts = 0; // Reset attempts to try again
+                                continue;
+                            }
+                            else if (resolution === 'skip') {
+                                console.log(`[StanleyEngine Prompt] User requested to skip. Continuing to next step...`);
+                                break; // Exit retry loop and proceed
+                            }
+                        }
+                        throw stepError;
+                    }
+                    else {
+                        // Wait briefly before retrying
+                        await this.wait(2000);
+                    }
+                }
+            }
+            // Evaluate edge mapping logic to step to the next sequence item
+            const currentId = currentNode.id;
+            const nextEdge = workflow.edges.find(e => e.source === currentId);
+            if (nextEdge) {
+                currentNode = workflow.nodes.find(n => n.id === nextEdge.target);
+            }
+            else {
+                currentNode = undefined; // Sequence path completed cleanly
+            }
+        }
+        console.log(`[StanleyEngine] Workflow execution completed successfully for: "${workflow.name}"`);
+        return scrapedData;
+    }
+    /**
      * Closes browser sessions cleanly.
      */
     async cleanup() {
@@ -631,4 +739,3 @@ class StanleyFoundation {
     }
 }
 exports.StanleyFoundation = StanleyFoundation;
-//# sourceMappingURL=foundationAgent.js.map

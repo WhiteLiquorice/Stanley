@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Shield, Zap, Lock, Terminal, Activity, CheckCircle2, AlertCircle, X, ChevronDown } from 'lucide-react';
+import { signIn, isLoggedIn } from '../lib/firebaseAuth';
 import './Landing.css';
 
 export function Landing() {
@@ -21,26 +22,25 @@ export function Landing() {
 
   const handleLaunchClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    const isLoggedIn = localStorage.getItem('stanley_logged_in') === 'true';
-    if (isLoggedIn) {
+    if (isLoggedIn()) {
       navigate('/dashboard');
     } else {
       setShowLoginModal(true);
     }
   };
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setLoginError('');
 
-    if (email === 'asherwright488@gmail.com' && password === 'AW12345!!') {
-      localStorage.setItem('stanley_logged_in', 'true');
+    const result = await signIn(email.trim(), password);
+    if (result.ok) {
       setShowLoginModal(false);
       setSearchParams({});
       navigate('/dashboard');
     } else {
-      setLoginError('Invalid credentials. Please verify your reviewer email and password.');
+      setLoginError(result.error || 'Sign in failed. Please check your credentials.');
     }
     setIsSubmitting(false);
   };

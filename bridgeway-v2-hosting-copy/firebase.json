@@ -1,0 +1,37 @@
+{
+  "hosting": {
+    "site": "bridgeway-db29e-stanley",
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/registerStanleyUser",
+        "function": "registerStanleyUser"
+      },
+      {
+        "source": "/google27c3d066c124b015.html",
+        "destination": "/google27c3d066c124b015.html"
+      },
+      {
+        "source": "/sitemap.xml",
+        "destination": "/sitemap.xml"
+      },
+      {
+        "source": "/privacy.html",
+        "destination": "/privacy.html"
+      },
+      {
+        "source": "/success.html",
+        "destination": "/success.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

@@ -11,10 +11,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "playwright": "^1.42.1",
-    "express": "^4.19.2",
+    "@xyflow/react": "^12.11.1",
     "cors": "^2.8.5",
+    "express": "^4.19.2",
     "lucide-react": "^1.21.0",
+    "playwright": "^1.42.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.18.0"
@@ -27,5 +28,12 @@
     "concurrently": "^8.2.2",
     "typescript": "~6.0.2",
     "vite": "^8.0.12"
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/playwright-core/package.json",
+      "node_modules/playwright-core/browsers.json",
+      "node_modules/playwright-core/lib/**/*.js"
+    ]
   }
 }

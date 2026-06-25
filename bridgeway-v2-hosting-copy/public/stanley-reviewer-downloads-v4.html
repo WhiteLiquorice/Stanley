@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Stanley — Reviewer Asset Hub</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            heading: ['Outfit', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#22c55e',
+              600: '#16a34a',
+            },
+            accent: {
+              500: '#06b6d4',
+            },
+            darkbg: {
+              900: '#030712',
+              800: '#0b0f19',
+              700: '#1f2937',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .glass-card {
+      background: rgba(11, 15, 25, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+  </style>
+</head>
+<body class="bg-darkbg-900 text-gray-100 font-sans selection:bg-brand-500/30 min-h-screen flex items-center justify-center p-6 relative overflow-x-hidden">
+
+  <!-- Glow effects -->
+  <div class="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-brand-500/10 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+  <div class="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-accent-500/10 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+
+  <div class="max-w-3xl w-full glass-card p-8 md:p-10 rounded-3xl border border-white/10 shadow-2xl relative z-10">
+    
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-brand-500/20 bg-darkbg-800 flex items-center justify-center">
+        <img src="stan-logo.png" alt="Stanley Logo" class="w-full h-full object-cover" onerror="this.style.display='none'" />
+      </div>
+      <span class="font-heading font-extrabold text-xl tracking-wide">STANLEY REVIEWER DASHBOARD</span>
+    </div>
+
+    <h2 class="font-heading font-black text-2xl md:text-3xl text-white mb-3 leading-tight">Extension Reviewer Assets & Credentials</h2>
+    <p class="text-gray-400 text-sm mb-8">
+      Welcome, Chrome Web Store Reviewer. Use this secure portal to download the Project Stanley local automation host binaries and obtain the test credentials required to authenticate the extension popup.
+    </p>
+
+    <!-- Credentials Section -->
+    <div class="mb-8 p-6 rounded-2xl bg-white/5 border border-white/10 text-left">
+      <h3 class="text-white font-bold text-sm mb-4 flex items-center gap-2">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-brand-500">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        Extension Test Credentials
+      </h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div>
+          <span class="text-gray-500 block mb-1 uppercase font-bold tracking-wider">Test Account Email</span>
+          <code class="text-brand-500 bg-white/5 px-2 py-1.5 rounded block text-sm font-mono select-all border border-white/5">stanley-reviewer@bridgewayapps.com</code>
+        </div>
+        <div>
+          <span class="text-gray-500 block mb-1 uppercase font-bold tracking-wider">Test Account Password</span>
+          <code class="text-brand-500 bg-white/5 px-2 py-1.5 rounded block text-sm font-mono select-all border border-white/5">StanleyReviewer2026!</code>
+        </div>
+      </div>
+    </div>
+
+    <!-- Download Buttons -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+      <!-- Windows App -->
+      <a href="stanley-setup.exe" download class="p-4 rounded-2xl bg-white/5 border border-white/10 hover:border-brand-500/30 flex items-center gap-4 group transition-all">
+        <div class="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 group-hover:scale-105 transition-transform">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 16v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1M12 4v12M8 12l4 4 4-4"/>
+          </svg>
+        </div>
+        <div class="text-left">
+          <div class="text-white font-semibold text-sm">Local Windows Host (.exe)</div>
+          <div class="text-xs text-gray-500">Local daemon loop wrapper</div>
+        </div>
+      </a>
+
+      <!-- Web Extension -->
+      <a href="stanley-extension.zip" download class="p-4 rounded-2xl bg-white/5 border border-white/10 hover:border-brand-500/30 flex items-center gap-4 group transition-all">
+        <div class="w-12 h-12 rounded-xl bg-accent-500/10 flex items-center justify-center text-accent-500 group-hover:scale-105 transition-transform">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+            <line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+        </div>
+        <div class="text-left">
+          <div class="text-white font-semibold text-sm">Chrome Extension ZIP (.zip)</div>
+          <div class="text-xs text-gray-500">For testing unpacked extension</div>
+        </div>
+      </a>
+    </div>
+
+    <!-- Reviewer Setup Instructions -->
+    <div class="pt-6 border-t border-white/5 text-left">
+      <h4 class="text-white font-bold text-sm mb-4">Reviewer Installation & Validation Guide</h4>
+      
+      <ol class="space-y-4 text-xs text-gray-400">
+        <li class="flex gap-2">
+          <span class="text-brand-500 font-bold">1.</span>
+          <div>
+            <strong class="text-gray-300 block">Extract the Extension ZIP</strong>
+            Extract the contents of <code class="text-accent-500 bg-white/5 px-1 rounded">stanley-extension.zip</code> to a local directory.
+          </div>
+        </li>
+        <li class="flex gap-2">
+          <span class="text-brand-500 font-bold">2.</span>
+          <div>
+            <strong class="text-gray-300 block">Load the Extension in Chrome</strong>
+            Navigate to <code class="text-accent-500 bg-white/5 px-1 rounded">chrome://extensions</code> in Google Chrome, toggle **Developer mode** in the top-right, click **Load unpacked**, and select the extracted extension folder.
+          </div>
+        </li>
+        <li class="flex gap-2">
+          <span class="text-brand-500 font-bold">3.</span>
+          <div>
+            <strong class="text-gray-300 block">Run the Windows Host Daemon</strong>
+            Run the downloaded <code class="text-accent-500 bg-white/5 px-1 rounded">stanley-setup.exe</code>. This starts the local companion Native Messaging listener.
+          </div>
+        </li>
+        <li class="flex gap-2">
+          <span class="text-brand-500 font-bold">4.</span>
+          <div>
+            <strong class="text-gray-300 block">Sign In and Authenticate</strong>
+            Click the extension icon in the toolbar, select **Sign In**, and authenticate using the reviewer credentials listed above.
+          </div>
+        </li>
+      </ol>
+    </div>
+
+  </div>
+</body>
+</html>

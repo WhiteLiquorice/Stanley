@@ -19,3 +19,9 @@ Thumbs.db
 client_secret*.json
 *.pem
 *.key
+
+# Environment files
+.env
+.env.*
+*.env
+

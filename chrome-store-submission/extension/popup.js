@@ -873,9 +873,8 @@ document.addEventListener('DOMContentLoaded', () => {
     statusDesc.textContent = 'Preparing builder workflow...';
     statusLog.textContent = 'Resolving vault credentials...';
     
-    chrome.storage.local.get(['stanley_vault', 'idToken'], (data) => {
+    chrome.storage.local.get(['stanley_vault'], (data) => {
       const vault = data.stanley_vault || {};
-      const idToken = data.idToken || '';
       
       // Deep copy actions so we don't overwrite draft references with plain text secrets
       const resolvedActions = JSON.parse(JSON.stringify(builderSteps));
@@ -897,19 +896,21 @@ document.addEventListener('DOMContentLoaded', () => {
       pausePanel.classList.add('hidden');
       resultBlock.classList.add('hidden');
       
-      chrome.runtime.sendMessage({
-        action: "run_custom_workflow",
-        actions: resolvedActions,
-        idToken: idToken,
-        activeMode: activeMode,
-        prompt: 'Custom Builder Workflow (' + resolvedActions.length + ' steps)'
-      }, (response) => {
-        runBuilderBtn.disabled = false;
-        if (chrome.runtime.lastError) {
-          statusDesc.textContent = 'Execution failed';
-          statusLog.textContent = 'Error: ' + chrome.runtime.lastError.message;
-          return;
-        }
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const currentUrl = (tabs && tabs[0]) ? tabs[0].url : '';
+        chrome.runtime.sendMessage({
+          action: "run_custom_workflow",
+          actions: resolvedActions,
+          activeMode: activeMode,
+          currentUrl: currentUrl,
+          prompt: 'Custom Builder Workflow (' + resolvedActions.length + ' steps)'
+        }, (response) => {
+          runBuilderBtn.disabled = false;
+          if (chrome.runtime.lastError) {
+            statusDesc.textContent = 'Execution failed';
+            statusLog.textContent = 'Error: ' + chrome.runtime.lastError.message;
+            return;
+          }
         if (response && response.error) {
           statusDesc.textContent = 'Execution Error';
           statusLog.textContent = response.error;
@@ -917,6 +918,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   });
+});
 
   // ── Save Builder Workflow ────────────────────────────────────────────────────
   saveBuilderBtn.addEventListener('click', () => {
@@ -993,13 +995,13 @@ document.addEventListener('DOMContentLoaded', () => {
     pausePanel.classList.add('hidden');
     resultBlock.classList.add('hidden');
 
-    chrome.storage.local.get(['idToken'], (data) => {
-      const idToken = data.idToken || '';
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const currentUrl = (tabs && tabs[0]) ? tabs[0].url : '';
       chrome.runtime.sendMessage({ 
         action: "compile_prompt", 
         prompt: prompt, 
-        idToken: idToken,
-        activeMode: activeMode 
+        activeMode: activeMode,
+        currentUrl: currentUrl
       }, (response) => {
         runBtn.removeAttribute('disabled');
         if (chrome.runtime.lastError) {
@@ -1007,13 +1009,13 @@ document.addEventListener('DOMContentLoaded', () => {
           statusLog.textContent = 'Error: ' + chrome.runtime.lastError.message;
           return;
         }
-        if (response && response.error) {
-          statusDesc.textContent = 'Compilation Error';
-          statusLog.textContent = response.error;
-        }
-      });
+      if (response && response.error) {
+        statusDesc.textContent = 'Compilation Error';
+        statusLog.textContent = response.error;
+      }
     });
   });
+});
 
   // ── Confirm / Cancel Plan ────────────────────────────────────────────────────
   confirmRunBtn.addEventListener('click', () => {
@@ -1021,11 +1023,14 @@ document.addEventListener('DOMContentLoaded', () => {
     statusDesc.textContent = 'Executing workflow...';
     statusLog.textContent = 'Running confirmed steps';
     
-    chrome.runtime.sendMessage({ action: "confirm_run", prompt: lastRunPrompt }, (response) => {
-      if (chrome.runtime.lastError) {
-        statusDesc.textContent = 'Failed to execute';
-        statusLog.textContent = chrome.runtime.lastError.message;
-      }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const currentUrl = (tabs && tabs[0]) ? tabs[0].url : '';
+      chrome.runtime.sendMessage({ action: "confirm_run", prompt: lastRunPrompt, currentUrl: currentUrl }, (response) => {
+        if (chrome.runtime.lastError) {
+          statusDesc.textContent = 'Failed to execute';
+          statusLog.textContent = chrome.runtime.lastError.message;
+        }
+      });
     });
   });
 
@@ -1112,13 +1117,10 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(access.reason);
       }
 
-      await chrome.storage.local.set({
+      await StanleyAuth.saveLoginResponse(authData, {
         email: email,
-        uid: uid,
-        idToken: idToken,
         status: status,
         trialEndsAt: trialEndsAtVal,
-        savedAt: Date.now()
       });
 
       loginStatus.textContent = "";
@@ -1138,7 +1140,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Sign Out ─────────────────────────────────────────────────────────────────
   signoutBtn.addEventListener('click', async (e) => {
     e.preventDefault();
-    await chrome.storage.local.remove(['email', 'uid', 'idToken', 'status', 'trialEndsAt', 'savedAt']);
+    await StanleyAuth.clearAuth();
     hasValidSession = false;
     emailInput.value = "";
     passwordInput.value = "";
@@ -1181,9 +1183,10 @@ document.addEventListener('DOMContentLoaded', () => {
         queryStatus();
         
         try {
+          const idToken = await StanleyAuth.getFreshIdToken();
           const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/stanley_users/${data.uid}`;
           const dbRes = await fetch(firestoreUrl, {
-            headers: { 'Authorization': `Bearer ${data.idToken}` }
+            headers: { 'Authorization': `Bearer ${idToken}` }
           });
           if (dbRes.ok) {
             const dbData = await dbRes.json();

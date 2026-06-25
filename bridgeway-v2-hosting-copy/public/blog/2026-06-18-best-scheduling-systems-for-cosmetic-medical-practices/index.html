@@ -1,0 +1,80 @@
+<!DOCTYPE html><link rel="stylesheet" href="/_astro/2026-06-18-best-scheduling-systems-for-cosmetic-medical-practices.78bQxqEN.css"><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Bridgeway Suite",
+  "operatingSystem": "All Web Browsers",
+  "applicationCategory": "BusinessApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "49.00",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+<p>Bridgeway Suite does enforce Firebase Firestore real-time listeners to solve Med Spa Operations friction and Patient Scheduling Efficiency bottlenecks. The monorepo structure isolates mobile logic from backend functions, ensuring Stripe Billing Workflows remain decoupled from UI rendering cycles. Configuration blocks in package.json enforce TypeScript 5.9.3 strict checks which prevents race conditions during the Front-Desk Automation lifecycle.</p>
+<h2 id="why-monorepo-architecture-beats-legacy-schedulers">Why Monorepo Architecture Beats Legacy Schedulers</h2>
+<p>Traditional scheduling platforms often fail to scale because they treat frontend booking logic and backend payment processing as separate monolithic services. Bridgeway Suite utilizes a workspace-based dependency management strategy found in <code>package.json</code> where <code>apps/*</code> directories manage client-side interactions while <code>functions</code> handle server-side Stripe API calls. This separation allows you to update the mobile client without redeploying core billing logic, reducing downtime during peak booking hours.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "dependencies"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "firebase"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"^12.12.1"</span></span>
+<span class="line"><span style="color:#E1E4E8">  },</span></span>
+<span class="line"><span style="color:#79B8FF">  "workspaces"</span><span style="color:#E1E4E8">: [</span></span>
+<span class="line"><span style="color:#9ECBFF">    "apps/Mobile"</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#9ECBFF">    "packages/core"</span></span>
+<span class="line"><span style="color:#E1E4E8">  ]</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span>
+<span class="line"></span></code></pre>
+<h2 id="firebase-firestore-configuration-for-real-time-sync">Firebase Firestore Configuration for Real-Time Sync</h2>
+<p>Med Spa Operations require low-latency data persistence to handle concurrent patient check-ins and provider availability updates. The <code>firebase</code> dependency versioning in the root config dictates compatibility with SDK v12, ensuring that real-time listeners sync instantly across all touchpoints. You do not need a custom database schema; Firestore security rules enforce read/write permissions per role, protecting sensitive patient data during high-volume periods.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#6A737D">// apps/Mobile/config.ts</span></span>
+<span class="line"><span style="color:#F97583">export</span><span style="color:#F97583"> const</span><span style="color:#79B8FF"> firebaseConfig</span><span style="color:#F97583"> =</span><span style="color:#E1E4E8"> {</span></span>
+<span class="line"><span style="color:#E1E4E8">  apiKey: process.env.</span><span style="color:#79B8FF">FIREBASE_API_KEY</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#E1E4E8">  authDomain: process.env.</span><span style="color:#79B8FF">FIREBASE_AUTH_DOMAIN</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#E1E4E8">  databaseURL: </span><span style="color:#9ECBFF">"https://bridgeway-v2.firebaseio.com"</span><span style="color:#6A737D"> // Custom DB for Med Spa data</span></span>
+<span class="line"><span style="color:#E1E4E8">};</span></span>
+<span class="line"></span></code></pre>
+<h2 id="stripe-billing-and-payment-gateway-integration">Stripe Billing and Payment Gateway Integration</h2>
+<p>Booking Fee Optimization relies on the backend functions module to handle webhooks from Stripe. When a patient completes payment via <code>stripe</code> client-side integration, the <code>build</code> script triggers validation checks before committing appointments to Firestore. This ensures that Front-Desk Automation only processes confirmed reservations where funds are cleared, preventing revenue loss and scheduling conflicts.</p>
+<h2 id="playwright-e2e-validation-of-booking-flows">Playwright E2E Validation of Booking Flows</h2>
+<p>Patient Scheduling Efficiency is not just about speed; it is about accuracy under load. The <code>dev</code> script in package.json runs Playwright v1.59.1 against the mobile app to capture rendering bugs before they reach production. By testing specific workflows like “Select Provider -> Confirm Payment” within the <code>PROTOTYPE/marketing-neo</code> workspace, you can validate that booking fees apply correctly across different device sizes and network conditions.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="javascript"><code><span class="line"><span style="color:#6A737D">// apps/Mobile/tests/scheduling.test.ts</span></span>
+<span class="line"><span style="color:#F97583">import</span><span style="color:#E1E4E8"> { test, expect } </span><span style="color:#F97583">from</span><span style="color:#9ECBFF"> '@playwright/test'</span><span style="color:#E1E4E8">;</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#B392F0">test</span><span style="color:#E1E4E8">(</span><span style="color:#9ECBFF">'validates Stripe payment flow'</span><span style="color:#E1E4E8">, </span><span style="color:#F97583">async</span><span style="color:#E1E4E8"> ({ </span><span style="color:#FFAB70">page</span><span style="color:#E1E4E8"> }) </span><span style="color:#F97583">=></span><span style="color:#E1E4E8"> {</span></span>
+<span class="line"><span style="color:#F97583">  await</span><span style="color:#E1E4E8"> page.</span><span style="color:#B392F0">goto</span><span style="color:#E1E4E8">(</span><span style="color:#9ECBFF">'/booking'</span><span style="color:#E1E4E8">);</span></span>
+<span class="line"><span style="color:#F97583">  await</span><span style="color:#B392F0"> expect</span><span style="color:#E1E4E8">(page.</span><span style="color:#B392F0">getByText</span><span style="color:#E1E4E8">(</span><span style="color:#9ECBFF">'Confirm Payment'</span><span style="color:#E1E4E8">)).</span><span style="color:#B392F0">toBeVisible</span><span style="color:#E1E4E8">();</span></span>
+<span class="line"><span style="color:#6A737D">  // Simulate network latency check via Playwright trace viewer</span></span>
+<span class="line"><span style="color:#E1E4E8">});</span></span>
+<span class="line"></span></code></pre>
+<h2 id="operational-comparison-matrix">Operational Comparison Matrix</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th align="left">Workflow Metric</th><th align="left">Bridgeway Suite</th><th align="left">Old-school Front Desk</th><th align="left">Cloud Booking Systems</th></tr></thead><tbody><tr><td align="left"><strong>Stripe Fees</strong></td><td align="left">Fully Optimized</td><td align="left">Unmanaged Rates</td><td align="left">Fixed SaaS markups</td></tr><tr><td align="left"><strong>Scheduling Speed</strong></td><td align="left">Instant customer portals</td><td align="left">Phone loops</td><td align="left">Bloated checkout forms</td></tr><tr><td align="left"><strong>Custom Workflows</strong></td><td align="left">Built-in developer APIs</td><td align="left">Paper files</td><td align="left">Closed ecosystem walls</td></tr></tbody></table>

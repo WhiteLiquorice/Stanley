@@ -71,10 +71,9 @@ class StanleyFoundation {
     async initialize() {
         console.log("[StanleyFoundation] Launching headful Chromium browser...");
         this.browser = await playwright_1.chromium.launch({
-            channel: 'chrome', // Use the user's installed Chrome — no browser download
-            headless: this.config.headless,
+            headless: this.config.headless, // Use configured headless mode
             args: [
-                '--disable-blink-features=AutomationControlled',
+                '--disable-blink-features=AutomationControlled', // Evade simple webdriver flags
                 '--no-sandbox'
             ]
         });
@@ -122,16 +121,6 @@ class StanleyFoundation {
                     return '';
                 if (el.id)
                     return `#${el.id}`;
-                // Prefer stable semantic attributes over fragile class-based paths
-                const ariaLabel = el.getAttribute('aria-label');
-                if (ariaLabel)
-                    return `[aria-label="${ariaLabel.replace(/"/g, '\\"')}"]`;
-                const nameAttr = el.getAttribute('name');
-                if (nameAttr)
-                    return `${el.nodeName.toLowerCase()}[name="${nameAttr.replace(/"/g, '\\"')}"]`;
-                const dataTestId = el.getAttribute('data-testid');
-                if (dataTestId)
-                    return `[data-testid="${dataTestId.replace(/"/g, '\\"')}"]`;
                 const pathParts = [];
                 let current = el;
                 while (current && current.nodeType === Node.ELEMENT_NODE) {
@@ -210,11 +199,11 @@ class StanleyFoundation {
     /**
      * Navigates the current browser page to a target URL.
      */
-    async navigate(url, timeout = 30000) {
+    async navigate(url) {
         if (!this.page)
             throw new Error("Agent browser session is not initialized.");
         console.log(`[StanleyFoundation] Navigating context to: ${url}`);
-        await this.page.goto(url, { waitUntil: 'load', timeout });
+        await this.page.goto(url, { waitUntil: 'load' });
     }
     /**
      * Helper to wait for a specific duration in milliseconds.
@@ -501,9 +490,8 @@ class StanleyFoundation {
     /**
      * Waits until the page network is idle or a timeout is reached.
      * Prevents retrying actions into an actively-loading page.
-     * Default 5s — SPAs with persistent connections will time out gracefully.
      */
-    async waitForPageStable(ms = 5000) {
+    async waitForPageStable(ms = 500) {
         if (!this.page)
             return;
         try {

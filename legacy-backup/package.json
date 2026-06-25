@@ -4,21 +4,13 @@
   "description": "Project Stanley - Local Browser Butler Automation Framework",
   "main": "foundationAgent.js",
   "scripts": {
-    "build": "tsc",
-    "build:daemon": "tsc && node stanley-daemon/build.js"
+    "build": "tsc"
   },
   "dependencies": {
     "playwright": "^1.42.1"
   },
   "devDependencies": {
-    "@types/node": "^20.12.7",
-    "pkg": "^5.8.1",
-    "typescript": "^5.4.5"
-  },
-  "pkg": {
-    "assets": [
-      "node_modules/playwright-core/lib/**/*",
-      "node_modules/playwright/**/*"
-    ]
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7"
   }
 }

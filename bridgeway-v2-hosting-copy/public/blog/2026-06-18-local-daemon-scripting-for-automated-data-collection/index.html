@@ -1,0 +1,72 @@
+<!DOCTYPE html><link rel="stylesheet" href="/_astro/2026-06-18-best-scheduling-systems-for-cosmetic-medical-practices.78bQxqEN.css"><script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Project Stanley",
+  "operatingSystem": "Windows, macOS, Linux",
+  "applicationCategory": "DeveloperApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
+<p>Project Stanley does initialize headful Chromium contexts with serialized session persistence to solve automation detection evasion and persistent data extraction latency. This implementation leverages Playwright Workflows to ensure Browser Automation remains stable across restart cycles without external API dependencies. By isolating state management within <code>foundationAgent.ts</code>, the system supports continuous Local Daemon Scripting via <code>stanley_session_state.json</code>.</p>
+<h2 id="session-persistence-and-state-recovery-in-stanleyfoundation">Session Persistence and State Recovery in <code>StanleyFoundation</code></h2>
+<p>The core architecture relies on <code>StanleyFoundation</code> to manage non-headless browser lifecycles, which is critical for daemon operations that require uptime over hours. You configure this via the <code>.env</code> file by setting <code>STANLEY_HEADLESS=false</code>. If you run headless by default, you lose the ability to solve CAPTCHAs or MFA challenges interactively. The class constructor accepts an <code>AgentConfig</code> object where <code>statePath</code> points to a JSON directory on disk rather than ephemeral memory.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#F97583">const</span><span style="color:#79B8FF"> stateText</span><span style="color:#F97583"> =</span><span style="color:#E1E4E8"> fs.</span><span style="color:#B392F0">readFileSync</span><span style="color:#E1E4E8">(</span><span style="color:#79B8FF">this</span><span style="color:#E1E4E8">.config.statePath, </span><span style="color:#9ECBFF">'utf-8'</span><span style="color:#E1E4E8">);</span></span>
+<span class="line"><span style="color:#E1E4E8">contextOptions.storageState </span><span style="color:#F97583">=</span><span style="color:#79B8FF"> JSON</span><span style="color:#E1E4E8">.</span><span style="color:#B392F0">parse</span><span style="color:#E1E4E8">(stateText);</span></span>
+<span class="line"></span></code></pre>
+<p>This block ensures that if the process restarts (killed by the OS or user), it restores cookies and storage from the previous session instantly. This avoids re-authentication on every daemon run. The <code>initialize</code> method also exposes a node event logging function to the browser window context via <code>page.exposeFunction</code>. This allows the foundation layer to capture DOM events without modifying the page’s HTML structure itself.</p>
+<h2 id="dom-event-injection-and-interaction-logging">DOM Event Injection and Interaction Logging</h2>
+<p>To log user click, change, and submit paths into serialized macro timelines, you inject global DOM event listener scripts directly into the page initialization phase. The <code>foundationAgent.ts</code> class defines an <code>InteractionEvent</code> interface that captures selector, value, and current URL context. This is vital for debugging complex scraping operations where visual layout changes frequently.</p>
+<p>You must mask the window navigator webdriver attribute to evade simple automation detection tools like Selenium or Puppeteer fingerprinters.</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="typescript"><code><span class="line"><span style="color:#F97583">await</span><span style="color:#79B8FF"> this</span><span style="color:#E1E4E8">.page.</span><span style="color:#B392F0">addInitScript</span><span style="color:#E1E4E8">(() </span><span style="color:#F97583">=></span><span style="color:#E1E4E8"> {</span></span>
+<span class="line"><span style="color:#E1E4E8">  Object.</span><span style="color:#B392F0">defineProperty</span><span style="color:#E1E4E8">(navigator, </span><span style="color:#9ECBFF">'webdriver'</span><span style="color:#E1E4E8">, { </span><span style="color:#B392F0">get</span><span style="color:#E1E4E8">: () </span><span style="color:#F97583">=></span><span style="color:#79B8FF"> undefined</span><span style="color:#E1E4E8"> });</span></span>
+<span class="line"><span style="color:#E1E4E8">});</span></span>
+<span class="line"></span></code></pre>
+<p>If you omit <code>logStanleyEvent</code> registration in the constructor, your daemon will not record the click timeline required for macro building. This layer establishes the baseline “Record-and-Generalize” behavior so that subsequent agents can replay these sequences reliably.</p>
+<h2 id="network-sniffing-for-api-payload-extraction">Network Sniffing for API Payload Extraction</h2>
+<p>Standard scraping fails when targets employ paywalled JSON back-end data payloads hidden behind fetch or XHR requests. The <code>Skeleton_Key/networkSniffer.ts</code> utility addresses this by launching Playwright in headful mode to attach request/response listeners directly to the network interceptors. This bypasses visual DOM rendering entirely and dumps raw JSON back-end data without needing to parse HTML tables.</p>
+<p>This approach is superior for extracting structured data from legacy directories like Mindbody or Vagaro where frontend rendering differs from backend API structure. You configure this by enabling <code>networkSniffer.ts</code> in your main script to intercept all Fetch operations. This eliminates the need for complex CSS selectors when the actual data exists only in the response body.</p>
+<h2 id="scaling-scraping-operations-via-onboarding-agents">Scaling Scraping Operations via Onboarding Agents</h2>
+<p>For tasks requiring visual layout analysis and programmatic access tree mapping, <code>Onboarding/onboardingAgent.ts</code> handles the initial scraping phase. It focuses on extracting customer data tables and normalizing them into Bridgeway’s native formats rather than raw text strings. This agent relies on the foundation layer to maintain context while it traverses complex DOM structures that other browsers might misinterpret due to dynamic rendering.</p>
+<p>When combining these components, your local daemon script effectively becomes a self-sustaining extraction engine that requires no manual intervention beyond configuration. You do not need to manage individual browser instances; <code>StanleyFoundation</code> abstracts the lifecycle management so you can focus on data output and logic flow.</p>
+<h2 id="tooling-comparison-matrix">Tooling Comparison Matrix</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th align="left">Feature / Criteria</th><th align="left">Project Stanley</th><th align="left">Manual Crawl Scripts</th><th align="left">Cloud Scraping Platforms</th></tr></thead><tbody><tr><td align="left"><strong>Setup Cost</strong></td><td align="left">Zero Setup / Local Engine</td><td align="left">High developer config hours</td><td align="left">High subscription fees</td></tr><tr><td align="left"><strong>Flakiness Recovery</strong></td><td align="left">Self-healing execution blocks</td><td align="left">None (Fails on DOM changes)</td><td align="left">Retries (Charged per attempt)</td></tr><tr><td align="left"><strong>API Costs</strong></td><td align="left">$0 (Runs locally on localhost)</td><td align="left">$0</td><td align="left">High monthly CPM bills</td></tr><tr><td align="left"><strong>Local Run Option</strong></td><td align="left">Native local daemon</td><td align="left">Local execution</td><td align="left">Cloud-only (No local exports)</td></tr></tbody></table>

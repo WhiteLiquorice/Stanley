@@ -1,7 +1,7 @@
 [
   {
     "id": "1",
-    "name": "Google Search Automation",
+    "name": "Google Search Automation (Basic)",
     "nodes": [
       {
         "id": "1",
@@ -9,6 +9,10 @@
         "label": "Start Trigger",
         "data": {
           "url": "https://www.google.com"
+        },
+        "position": {
+          "x": 250,
+          "y": 50
         }
       },
       {
@@ -18,6 +22,10 @@
         "data": {
           "selector": "textarea[name=\"q\"]",
           "value": "Project Stanley enterprise automation"
+        },
+        "position": {
+          "x": 250,
+          "y": 150
         }
       },
       {
@@ -25,7 +33,11 @@
         "type": "click",
         "label": "Submit Search",
         "data": {
-          "selector": "input[name=\"btnK\"]"
+          "selector": "input[name=\"btnK\"]:visible"
+        },
+        "position": {
+          "x": 250,
+          "y": 250
         }
       },
       {
@@ -34,6 +46,10 @@
         "label": "Wait for Results",
         "data": {
           "ms": "3000"
+        },
+        "position": {
+          "x": 250,
+          "y": 350
         }
       },
       {
@@ -42,6 +58,10 @@
         "label": "Scrape Text",
         "data": {
           "selector": "#search"
+        },
+        "position": {
+          "x": 250,
+          "y": 450
         }
       }
     ],
@@ -61,6 +81,228 @@
       {
         "source": "4",
         "target": "5"
+      }
+    ]
+  },
+  {
+    "id": "2",
+    "name": "Google News AI Summarizer",
+    "nodes": [
+      {
+        "id": "1",
+        "type": "trigger",
+        "label": "Trigger Start",
+        "data": {
+          "url": ""
+        },
+        "position": {
+          "x": 250,
+          "y": 50
+        }
+      },
+      {
+        "id": "2",
+        "type": "navigate",
+        "label": "Go to Google Search",
+        "data": {
+          "url": "https://www.google.com/search?q={{query}}&tbm=nws"
+        },
+        "position": {
+          "x": 250,
+          "y": 150
+        }
+      },
+      {
+        "id": "3",
+        "type": "scrape",
+        "label": "Scrape Article Links",
+        "data": {
+          "selector": "div.g a"
+        },
+        "position": {
+          "x": 250,
+          "y": 250
+        }
+      },
+      {
+        "id": "4",
+        "type": "js_code",
+        "label": "Loop, Scrape & Summarize",
+        "data": {
+          "code": "const urls = context.variables['3'] || '';\nconst targets = urls.split('\\n').filter(url => url.startsWith('http') && !url.includes('google.com')).slice(0, 2);\ncontext.log('Target URLs parsed: ' + JSON.stringify(targets));\nif (targets.length === 0) {\n  return 'No news article URLs found.';\n}\nlet compiledText = '';\nfor (const url of targets) {\n  context.log('Navigating to article: ' + url);\n  try {\n    await context.agent.navigate(url);\n    await context.agent.wait(2000);\n    const text = await context.agent.scrapeContent('body');\n    compiledText += '\\n\\n--- Article: ' + url + ' ---\\n' + text.substring(0, 3000);\n  } catch (err) {\n    context.log('Error scraping ' + url + ': ' + err.message);\n  }\n}\nconst summary = await context.ai.prompt({\n  system: 'You are a news summarization assistant. Summarize everything clearly.',\n  prompt: 'Please summarize the following articles in 3 concise bullet points:\\n\\n' + compiledText\n});\ncontext.log('\\n=== DYNAMIC SUMMARY ===\\n' + summary);\nreturn summary;"
+        },
+        "position": {
+          "x": 250,
+          "y": 350
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "1",
+        "target": "2"
+      },
+      {
+        "source": "2",
+        "target": "3"
+      },
+      {
+        "source": "3",
+        "target": "4"
+      }
+    ]
+  },
+  {
+    "id": "3",
+    "name": "E-Commerce Price Comparison",
+    "nodes": [
+      {
+        "id": "1",
+        "type": "trigger",
+        "label": "Trigger Start",
+        "data": {
+          "url": ""
+        },
+        "position": {
+          "x": 250,
+          "y": 50
+        }
+      },
+      {
+        "id": "2",
+        "type": "navigate",
+        "label": "Amazon Search",
+        "data": {
+          "url": "https://www.amazon.com/s?k={{product}}"
+        },
+        "position": {
+          "x": 250,
+          "y": 150
+        }
+      },
+      {
+        "id": "3",
+        "type": "scrape",
+        "label": "Scrape Amazon Results",
+        "data": {
+          "selector": "span.a-price-whole"
+        },
+        "position": {
+          "x": 250,
+          "y": 250
+        }
+      },
+      {
+        "id": "4",
+        "type": "navigate",
+        "label": "eBay Search",
+        "data": {
+          "url": "https://www.ebay.com/sch/i.html?_nkw={{product}}"
+        },
+        "position": {
+          "x": 250,
+          "y": 350
+        }
+      },
+      {
+        "id": "5",
+        "type": "scrape",
+        "label": "Scrape eBay Results",
+        "data": {
+          "selector": ".s-item__price"
+        },
+        "position": {
+          "x": 250,
+          "y": 450
+        }
+      },
+      {
+        "id": "6",
+        "type": "ai_prompt",
+        "label": "AI Price Analysis",
+        "data": {
+          "prompt": "Amazon price matches: {{3}}\neBay price matches: {{5}}\nEvaluate the prices for '{{product}}' and summarize which platform is cheaper and the typical price range.",
+          "system": "You are a shopping comparison agent."
+        },
+        "position": {
+          "x": 250,
+          "y": 550
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "1",
+        "target": "2"
+      },
+      {
+        "source": "2",
+        "target": "3"
+      },
+      {
+        "source": "3",
+        "target": "4"
+      },
+      {
+        "source": "4",
+        "target": "5"
+      },
+      {
+        "source": "5",
+        "target": "6"
+      }
+    ]
+  },
+  {
+    "id": "4",
+    "name": "HackerNews Startups Lead Finder",
+    "nodes": [
+      {
+        "id": "1",
+        "type": "trigger",
+        "label": "Trigger Start",
+        "data": {
+          "url": "https://news.ycombinator.com"
+        },
+        "position": {
+          "x": 250,
+          "y": 50
+        }
+      },
+      {
+        "id": "2",
+        "type": "scrape",
+        "label": "Scrape Frontpage Headlines",
+        "data": {
+          "selector": "span.titleline"
+        },
+        "position": {
+          "x": 250,
+          "y": 150
+        }
+      },
+      {
+        "id": "3",
+        "type": "ai_prompt",
+        "label": "Extract Tech Startups",
+        "data": {
+          "prompt": "Read the following Hacker News headlines and extract start-up launches, new open-source projects, or hiring posts:\n\n{{2}}",
+          "system": "You are a lead generation research assistant."
+        },
+        "position": {
+          "x": 250,
+          "y": 250
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "1",
+        "target": "2"
+      },
+      {
+        "source": "2",
+        "target": "3"
       }
     ]
   }
