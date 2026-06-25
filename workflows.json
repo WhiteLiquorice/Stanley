@@ -10,10 +10,7 @@
         "data": {
           "url": "https://www.google.com"
         },
-        "position": {
-          "x": 250,
-          "y": 50
-        }
+        "position": { "x": 250, "y": 50 }
       },
       {
         "id": "2",
@@ -23,65 +20,38 @@
           "selector": "textarea[name=\"q\"]",
           "value": "Project Stanley enterprise automation"
         },
-        "position": {
-          "x": 250,
-          "y": 150
-        }
+        "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
         "type": "click",
         "label": "Submit Search",
         "data": {
-          "selector": "input[name=\"btnK\"]:visible"
+          "description": "Google Search button",
+          "selector": "input[name=\"btnK\"]"
         },
-        "position": {
-          "x": 250,
-          "y": 250
-        }
+        "position": { "x": 250, "y": 250 }
       },
       {
         "id": "4",
         "type": "wait",
         "label": "Wait for Results",
-        "data": {
-          "ms": "3000"
-        },
-        "position": {
-          "x": 250,
-          "y": 350
-        }
+        "data": { "ms": "3000" },
+        "position": { "x": 250, "y": 350 }
       },
       {
         "id": "5",
         "type": "scrape",
         "label": "Scrape Text",
-        "data": {
-          "selector": "#search"
-        },
-        "position": {
-          "x": 250,
-          "y": 450
-        }
+        "data": { "selector": "#search" },
+        "position": { "x": 250, "y": 450 }
       }
     ],
     "edges": [
-      {
-        "source": "1",
-        "target": "2"
-      },
-      {
-        "source": "2",
-        "target": "3"
-      },
-      {
-        "source": "3",
-        "target": "4"
-      },
-      {
-        "source": "4",
-        "target": "5"
-      }
+      { "source": "1", "target": "2" },
+      { "source": "2", "target": "3" },
+      { "source": "3", "target": "4" },
+      { "source": "4", "target": "5" }
     ]
   },
   {
@@ -93,63 +63,33 @@
         "type": "trigger",
         "label": "Trigger Start",
         "data": {
-          "url": ""
+          "url": "https://news.google.com"
         },
-        "position": {
-          "x": 250,
-          "y": 50
-        }
+        "position": { "x": 250, "y": 50 }
       },
       {
         "id": "2",
-        "type": "navigate",
-        "label": "Go to Google Search",
+        "type": "scrape",
+        "label": "Scrape Headlines",
         "data": {
-          "url": "https://www.google.com/search?q={{query}}&tbm=nws"
+          "selector": "article"
         },
-        "position": {
-          "x": 250,
-          "y": 150
-        }
+        "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
-        "type": "scrape",
-        "label": "Scrape Article Links",
+        "type": "ai_prompt",
+        "label": "Summarize with AI",
         "data": {
-          "selector": "div.g a"
+          "prompt": "Please summarize the following Google News headlines into 5 concise bullet points, focusing on the most important stories:\n\n{{2}}",
+          "system": "You are a news summarization assistant. Be concise and clear."
         },
-        "position": {
-          "x": 250,
-          "y": 250
-        }
-      },
-      {
-        "id": "4",
-        "type": "js_code",
-        "label": "Loop, Scrape & Summarize",
-        "data": {
-          "code": "const urls = context.variables['3'] || '';\nconst targets = urls.split('\\n').filter(url => url.startsWith('http') && !url.includes('google.com')).slice(0, 2);\ncontext.log('Target URLs parsed: ' + JSON.stringify(targets));\nif (targets.length === 0) {\n  return 'No news article URLs found.';\n}\nlet compiledText = '';\nfor (const url of targets) {\n  context.log('Navigating to article: ' + url);\n  try {\n    await context.agent.navigate(url);\n    await context.agent.wait(2000);\n    const text = await context.agent.scrapeContent('body');\n    compiledText += '\\n\\n--- Article: ' + url + ' ---\\n' + text.substring(0, 3000);\n  } catch (err) {\n    context.log('Error scraping ' + url + ': ' + err.message);\n  }\n}\nconst summary = await context.ai.prompt({\n  system: 'You are a news summarization assistant. Summarize everything clearly.',\n  prompt: 'Please summarize the following articles in 3 concise bullet points:\\n\\n' + compiledText\n});\ncontext.log('\\n=== DYNAMIC SUMMARY ===\\n' + summary);\nreturn summary;"
-        },
-        "position": {
-          "x": 250,
-          "y": 350
-        }
+        "position": { "x": 250, "y": 250 }
       }
     ],
     "edges": [
-      {
-        "source": "1",
-        "target": "2"
-      },
-      {
-        "source": "2",
-        "target": "3"
-      },
-      {
-        "source": "3",
-        "target": "4"
-      }
+      { "source": "1", "target": "2" },
+      { "source": "2", "target": "3" }
     ]
   },
   {
@@ -160,61 +100,36 @@
         "id": "1",
         "type": "trigger",
         "label": "Trigger Start",
-        "data": {
-          "url": ""
-        },
-        "position": {
-          "x": 250,
-          "y": 50
-        }
+        "data": { "url": "https://www.amazon.com" },
+        "position": { "x": 250, "y": 50 }
       },
       {
         "id": "2",
         "type": "navigate",
         "label": "Amazon Search",
-        "data": {
-          "url": "https://www.amazon.com/s?k={{product}}"
-        },
-        "position": {
-          "x": 250,
-          "y": 150
-        }
+        "data": { "url": "https://www.amazon.com/s?k={{product}}" },
+        "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
         "type": "scrape",
         "label": "Scrape Amazon Results",
-        "data": {
-          "selector": "span.a-price-whole"
-        },
-        "position": {
-          "x": 250,
-          "y": 250
-        }
+        "data": { "selector": "span.a-price-whole" },
+        "position": { "x": 250, "y": 250 }
       },
       {
         "id": "4",
         "type": "navigate",
         "label": "eBay Search",
-        "data": {
-          "url": "https://www.ebay.com/sch/i.html?_nkw={{product}}"
-        },
-        "position": {
-          "x": 250,
-          "y": 350
-        }
+        "data": { "url": "https://www.ebay.com/sch/i.html?_nkw={{product}}" },
+        "position": { "x": 250, "y": 350 }
       },
       {
         "id": "5",
         "type": "scrape",
         "label": "Scrape eBay Results",
-        "data": {
-          "selector": ".s-item__price"
-        },
-        "position": {
-          "x": 250,
-          "y": 450
-        }
+        "data": { "selector": ".s-item__price" },
+        "position": { "x": 250, "y": 450 }
       },
       {
         "id": "6",
@@ -224,33 +139,15 @@
           "prompt": "Amazon price matches: {{3}}\neBay price matches: {{5}}\nEvaluate the prices for '{{product}}' and summarize which platform is cheaper and the typical price range.",
           "system": "You are a shopping comparison agent."
         },
-        "position": {
-          "x": 250,
-          "y": 550
-        }
+        "position": { "x": 250, "y": 550 }
       }
     ],
     "edges": [
-      {
-        "source": "1",
-        "target": "2"
-      },
-      {
-        "source": "2",
-        "target": "3"
-      },
-      {
-        "source": "3",
-        "target": "4"
-      },
-      {
-        "source": "4",
-        "target": "5"
-      },
-      {
-        "source": "5",
-        "target": "6"
-      }
+      { "source": "1", "target": "2" },
+      { "source": "2", "target": "3" },
+      { "source": "3", "target": "4" },
+      { "source": "4", "target": "5" },
+      { "source": "5", "target": "6" }
     ]
   },
   {
@@ -261,25 +158,15 @@
         "id": "1",
         "type": "trigger",
         "label": "Trigger Start",
-        "data": {
-          "url": "https://news.ycombinator.com"
-        },
-        "position": {
-          "x": 250,
-          "y": 50
-        }
+        "data": { "url": "https://news.ycombinator.com" },
+        "position": { "x": 250, "y": 50 }
       },
       {
         "id": "2",
         "type": "scrape",
         "label": "Scrape Frontpage Headlines",
-        "data": {
-          "selector": "span.titleline"
-        },
-        "position": {
-          "x": 250,
-          "y": 150
-        }
+        "data": { "selector": "span.titleline" },
+        "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
@@ -289,21 +176,12 @@
           "prompt": "Read the following Hacker News headlines and extract start-up launches, new open-source projects, or hiring posts:\n\n{{2}}",
           "system": "You are a lead generation research assistant."
         },
-        "position": {
-          "x": 250,
-          "y": 250
-        }
+        "position": { "x": 250, "y": 250 }
       }
     ],
     "edges": [
-      {
-        "source": "1",
-        "target": "2"
-      },
-      {
-        "source": "2",
-        "target": "3"
-      }
+      { "source": "1", "target": "2" },
+      { "source": "2", "target": "3" }
     ]
   }
 ]

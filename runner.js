@@ -1,18 +1,5 @@
 /**
- * runner.js — branching-aware workflow runner.
- *
- * The original walked exactly one edge per node (`edges.find(e => e.source === id)`),
- * so a workflow that forked, had a fallback path, or looped only ever ran the first
- * branch. This version delegates traversal to branchingEngine.executeGraph, which:
- *   - follows conditional edges (success / failure / contains / exists / true / false)
- *   - routes to an `onFailure` edge instead of aborting when a step throws
- *   - supports `condition`/`if` decision nodes (true/false edges)
- *   - allows intentional loops, capped by maxSteps to catch runaways
- *
- * Public signature is unchanged so server.js can swap this in directly:
- *   runWorkflow(workflow, onLog, secrets)
- *
- * NOTE: uses StanleyFoundationEnhanced so stable tab ids and elementExists() work.
+ * runner.js — branching-aware workflow runner for server-side (Playwright) execution.
  */
 
 const path = require('path');
@@ -26,8 +13,18 @@ async function runWorkflow(workflow, onLog, secrets = {}) {
     throw new Error('Workflow has no trigger node');
   }
 
+  // Validate trigger URL before launching a browser
+  const triggerNode = workflow.nodes.find(n => n.type === 'trigger');
+  const triggerUrl = triggerNode?.data?.url || '';
+  if (!triggerUrl || triggerUrl === 'https://' || triggerUrl === 'http://' || triggerUrl.length < 8) {
+    throw new Error(
+      `Workflow trigger URL is empty or invalid ("${triggerUrl}"). ` +
+      `Please set a valid starting URL on the trigger node before running.`
+    );
+  }
+
   const agent = new StanleyFoundationEnhanced({
-    headless: false, // Keep it visible so the user can watch / solve CAPTCHAs.
+    headless: false,
     statePath: path.join(__dirname, '..', 'session_state.json'),
   });
 
@@ -38,7 +35,6 @@ async function runWorkflow(workflow, onLog, secrets = {}) {
     const scraped = await executeGraph(agent, workflow, {
       onLog,
       secrets,
-      // Branching graph runs headful, so a block just pauses for manual resolution.
       onBlocked: async (block, label) => {
         onLog(`${label} ${block.hint} — pausing 10s for manual resolution...`);
         await agent.wait(10000);

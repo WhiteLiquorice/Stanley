@@ -206,6 +206,10 @@ export function CockpitInner() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [pollingLogs, setPollingLogs] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_AUTO_RETRIES = 3;
+  // Workflow queued for re-launch (for Retry button)
+  const [pendingRetryWorkflowId, setPendingRetryWorkflowId] = useState<string | null>(null);
 
   // AI Chatbot states
   interface ChatMessage {
@@ -432,9 +436,47 @@ export function CockpitInner() {
           setActiveRun(data);
           if (data.status !== 'Running') {
             setPollingLogs(false);
+            clearInterval(interval);
             // Refresh list
             const runsRes = await fetch(`${API_URL}/runs`);
             setRuns(await runsRes.json());
+
+            // Auto-retry on failure (up to MAX_AUTO_RETRIES)
+            if (data.status === 'Failed') {
+              setRetryCount(prev => {
+                const next = prev + 1;
+                if (next < MAX_AUTO_RETRIES && data.workflowId) {
+                  // Brief pause then relaunch
+                  setTimeout(async () => {
+                    try {
+                      const reRunRes = await fetch(`${API_URL}/run/${data.workflowId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                      });
+                      const reRunData = await reRunRes.json();
+                      if (reRunData.success) {
+                        setActiveRunId(reRunData.runId);
+                        setActiveRun(prev2 => prev2 ? {
+                          ...prev2,
+                          id: reRunData.runId,
+                          status: 'Running',
+                          logs: [...(prev2.logs || []), `[System] Auto-retry ${next}/${MAX_AUTO_RETRIES}...`]
+                        } : null);
+                      }
+                    } catch (_) {}
+                  }, 1500);
+                } else {
+                  // Max retries hit — store workflowId for manual Retry button
+                  setPendingRetryWorkflowId(data.workflowId);
+                }
+                return next;
+              });
+            } else {
+              // Success — reset counters
+              setRetryCount(0);
+              setPendingRetryWorkflowId(null);
+            }
           }
         } catch (err) {
           console.error(err);
@@ -442,7 +484,7 @@ export function CockpitInner() {
         }
       };
       
-      poll(); // initial check
+      poll();
       interval = window.setInterval(poll, 1500);
     }
     return () => clearInterval(interval);
@@ -724,6 +766,14 @@ export function CockpitInner() {
     }, '*');
   };
 
+  const handleCloseLogs = () => {
+    setActiveRun(null);
+    setActiveRunId(null);     // stop any polling
+    setPollingLogs(false);
+    setRetryCount(0);
+    setPendingRetryWorkflowId(null);
+  };
+
   const handleCancelRun = () => {
     if (nativeRunning) {
       window.postMessage({ ns: 'stanley-web', cmd: 'cancel_native' }, '*');
@@ -733,10 +783,34 @@ export function CockpitInner() {
         status: 'Failed',
         logs: [...(prev.logs || []), '[System] Native run cancellation requested.']
       } : null);
+      setPendingRetryWorkflowId(null);
     } else {
-      setActiveRunId(null);
-      setActiveRun(null);
-      setPollingLogs(false);
+      handleCloseLogs();
+    }
+  };
+
+  const handleManualRetry = async () => {
+    if (!pendingRetryWorkflowId) return;
+    try {
+      const res = await fetch(`${API_URL}/run/${pendingRetryWorkflowId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRetryCount(0);
+        setPendingRetryWorkflowId(null);
+        setActiveRunId(data.runId);
+        setActiveRun(prev => prev ? {
+          ...prev,
+          id: data.runId,
+          status: 'Running',
+          logs: [...(prev.logs || []), '[System] Manual retry started...']
+        } : null);
+      }
+    } catch (err) {
+      console.error('Retry failed:', err);
     }
   };
 
@@ -1614,9 +1688,16 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
           <div className="modal-content glass-panel logs-modal">
             <div className="modal-header">
               <h2>Execution Logs: {activeRun.workflowName}</h2>
-              <span className={`badge badge-${activeRun.status.toLowerCase()}`}>
-                {activeRun.status}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {pollingLogs && retryCount > 0 && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Retry {retryCount}/{MAX_AUTO_RETRIES}
+                  </span>
+                )}
+                <span className={`badge badge-${activeRun.status.toLowerCase()}`}>
+                  {activeRun.status}
+                </span>
+              </div>
             </div>
             
             <div className="log-output-box">
@@ -1627,20 +1708,40 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               ))}
               {pollingLogs && (
                 <div className="log-line active-polling">
-                  <Loader className="spinner inline"/> Running... (polling logs)
+                  <Loader className="spinner inline"/> Running...
+                  {retryCount > 0 && ` (auto-retry ${retryCount}/${MAX_AUTO_RETRIES})`}
+                </div>
+              )}
+              {/* Terminal failure state — max retries exhausted */}
+              {activeRun.status === 'Failed' && !pollingLogs && retryCount >= MAX_AUTO_RETRIES && (
+                <div className="log-line" style={{ color: 'var(--error)', marginTop: '0.5rem', fontWeight: 600 }}>
+                  ⚠️ Workflow failed after {MAX_AUTO_RETRIES} attempts.
                 </div>
               )}
             </div>
 
             <div className="modal-actions">
               {nativeRunning && (
-                <button className="btn btn-secondary" style={{ borderColor: 'var(--accent-danger)', color: 'var(--accent-danger)' }} onClick={handleCancelRun}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ borderColor: 'var(--error)', color: 'var(--error)' }}
+                  onClick={handleCancelRun}
+                >
                   Cancel Run
                 </button>
               )}
-              <button className="btn btn-primary" onClick={() => setActiveRun(null)}>
-                Close Logs
-              </button>
+              {/* Manual Retry button — shown only after all auto-retries are exhausted */}
+              {activeRun.status === 'Failed' && !pollingLogs && retryCount >= MAX_AUTO_RETRIES && pendingRetryWorkflowId && (
+                <button className="btn btn-secondary" onClick={handleManualRetry}>
+                  <RefreshCw size={14} style={{ display: 'inline', marginRight: '4px' }}/> Retry
+                </button>
+              )}
+              {/* Only allow closing when not actively running */}
+              {!pollingLogs && (
+                <button className="btn btn-primary" onClick={handleCloseLogs}>
+                  Close Logs
+                </button>
+              )}
             </div>
           </div>
         </div>
