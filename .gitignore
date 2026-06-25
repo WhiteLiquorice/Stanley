@@ -25,3 +25,12 @@ client_secret*.json
 .env.*
 *.env
 
+# Local only / deprecated folders
+reels/
+Pexels Videos/
+Skeleton_Key/
+blog/
+stanley-daemon/
+chrome-store-submission/
+
+
