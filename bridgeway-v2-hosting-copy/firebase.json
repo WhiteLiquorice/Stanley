@@ -29,6 +29,10 @@
         "destination": "/success.html"
       },
       {
+        "source": "/reviewer",
+        "destination": "/reviewer.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

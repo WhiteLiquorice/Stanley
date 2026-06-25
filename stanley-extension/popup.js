@@ -1,3 +1,5 @@
+import { StanleyAuth } from './tokenManager.js';
+
 // Mock chrome APIs for browser preview environments
 if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
   window.chrome = {

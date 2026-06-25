@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stanley — Reviewer Access</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 40px 48px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 20px; font-weight: 700; margin: 0 0 6px; }
+    .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 32px; }
+    .field { text-align: left; margin-bottom: 20px; }
+    .field label { display: block; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #64748b; margin-bottom: 6px; }
+    .value {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 15px;
+      color: #38bdf8;
+      word-break: break-all;
+    }
+    .note {
+      margin-top: 28px;
+      font-size: 12px;
+      color: #64748b;
+      line-height: 1.6;
+    }
+    .updated { color: #94a3b8; font-size: 11px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Stanley Reviewer Access</h1>
+    <p class="subtitle">Chrome Web Store review credentials</p>
+
+    <div class="field">
+      <label>Email</label>
+      <div class="value">reviewer@projectstanley.com</div>
+    </div>
+
+    <div class="field">
+      <label>Password</label>
+      <!-- UPDATE THIS VALUE EVERY TWO WEEKS -->
+      <div class="value" id="password">REPLACE_WITH_CURRENT_PASSWORD</div>
+    </div>
+
+    <p class="note">
+      These credentials are for Chrome Web Store reviewers only.<br>
+      The password rotates every two weeks. If it has expired,
+      please allow 24 hours for the update or contact us at
+      <a href="mailto:support@projectstanley.com" style="color:#38bdf8;">support@projectstanley.com</a>.
+    </p>
+
+    <p class="updated">Last updated: <!-- UPDATE DATE WHEN YOU ROTATE --></p>
+  </div>
+</body>
+</html>
