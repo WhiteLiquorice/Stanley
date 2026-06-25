@@ -582,52 +582,135 @@ export function CockpitInner() {
   const handleSendChatMessage = async (textToSend?: string) => {
     const text = (textToSend || chatInput).trim();
     if (!text) return;
-    
+
     if (!textToSend) setChatInput('');
-    
+
     const userMsg: ChatMessage = {
       id: Math.random().toString(),
       role: 'user',
       content: text
     };
-    
+
     setChatMessages(prev => [...prev, userMsg]);
     setChatLoading(true);
-    
+
     try {
-      const history = chatMessages.map(m => ({
-        role: m.role,
-        content: m.content
-      }));
-      
-      const response = await fetch(`${API_URL}/ai/chat`, {
+      // Step 1: Get the Gemini API key from the local vault server.
+      // If the server is offline, give a clear, actionable error instead of a cryptic JSON parse failure.
+      let apiKey: string | null = null;
+      try {
+        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(3000) });
+        if (vaultRes.ok) {
+          const secrets: any[] = await vaultRes.json();
+          const googleSecret = secrets.find(
+            s => s.name === 'Google API Key' || s.name?.toLowerCase().includes('gemini')
+          );
+          if (googleSecret?.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
+            apiKey = googleSecret.value;
+          }
+        }
+      } catch {
+        // Server offline — fall through to show helpful message
+      }
+
+      if (!apiKey) {
+        throw new Error(
+          'Stanley needs a Gemini API key to chat. Make sure the backend server is running ' +
+          '(npm run dev:backend) and add a real "Google API Key" in the Credential Vault.'
+        );
+      }
+
+      // Step 2: Build the Gemini request directly from the frontend.
+      const systemInstruction = `You are "Stanley", the AI Copilot for Project Stanley, an enterprise browser automation suite.
+Your goal is to help the user build, edit, and understand their low-code browser automation workflows.
+You must respond in strict JSON matching this schema:
+{
+  "message": "A conversational explanation of what you did or how you answered.",
+  "actions": []
+}
+
+The current workflow is provided in the prompt as a JSON object with:
+- name: string
+- nodes: Array of { id, type, label, data: { ... }, position: { x, y } }
+- edges: Array of { source, target, condition: ... }
+
+Supported Node Types:
+- 'trigger': Start step, takes "url" in data.
+- 'navigate': Go to a URL, takes "url" in data.
+- 'click': Click an element, takes "description" and optionally "selector" in data.
+- 'type': Type text into an input, takes "description", "value", and optionally "selector" in data.
+- 'wait': Wait for some milliseconds, takes "ms" (string) in data.
+- 'scrape': Extract text from a selector, takes "selector" in data.
+- 'open_tab': Open a new browser tab, takes "url" and "label" in data.
+- 'switch_tab': Switch active tab, takes "tab" or "index" in data.
+- 'close_tab': Close tab, takes "tab" or "index" in data.
+- 'if': Decision node, takes "condition" object in data: { type: "always"|"contains"|"notContains"|"exists"|"notExists", value: string }
+- 'goto': Jump to a labeled step, takes "label" in data.
+- 'label': Step label target, takes "label" in data.
+- 'ai_prompt': Run AI analysis, takes "prompt" and "system" (optional) in data.
+- 'js_code': Execute custom javascript, takes "code" in data.
+
+Supported Actions in your response:
+1. {"type": "add_node", "node": { "id": "unique_string", "type": "node_type", "label": "Label", "data": { ... }, "position": { "x": number, "y": number } }}
+2. {"type": "delete_node", "nodeId": "node_id_to_delete"}
+3. {"type": "update_node", "nodeId": "node_id_to_update", "nodeUpdates": { "label": "New Label", "data": { ... } }}
+4. {"type": "add_edge", "edge": { "source": "source_id", "target": "target_id", "condition": ... }}
+5. {"type": "delete_edge", "source": "source_id", "target": "target_id"}
+6. {"type": "set_workflow", "workflow": { "name": "New Name", "nodes": [...], "edges": [...] }}
+
+Rules:
+- Keep the graph clean. When adding nodes, space them 140px apart on the y-axis.
+- Connect new nodes using "add_edge".
+- If the user asks a general question, answer in "message" and leave "actions" empty.
+- Always output valid, parseable JSON. Do NOT wrap in markdown code fences.`;
+
+      const contents: any[] = [];
+      chatMessages.forEach(m => {
+        contents.push({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.content }]
+        });
+      });
+      const currentContext = `Current Workflow State: ${JSON.stringify(selectedWorkflow || null)}\n\nUser Request: ${text}`;
+      contents.push({ role: 'user', parts: [{ text: currentContext }] });
+
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      const geminiRes = await fetch(geminiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: text,
-          workflow: selectedWorkflow,
-          history: history
+          contents,
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: { responseMimeType: 'application/json' }
         })
       });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to call chat assistant.');
+
+      if (!geminiRes.ok) {
+        const errText = await geminiRes.text();
+        throw new Error(`Gemini API error: ${errText}`);
       }
-      
+
+      const geminiData = await geminiRes.json();
+      const resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(resultText);
+      } catch {
+        parsed = { message: resultText, actions: [] };
+      }
+
       let applied: string[] = [];
-      if (data.actions && Array.isArray(data.actions)) {
-        applied = applyChatActions(data.actions);
+      if (parsed.actions && Array.isArray(parsed.actions)) {
+        applied = applyChatActions(parsed.actions);
       }
-      
+
       const stanleyMsg: ChatMessage = {
         id: Math.random().toString(),
         role: 'stanley',
-        content: data.message || 'I processed that successfully.',
+        content: parsed.message || 'Done!',
         actionsApplied: applied.length > 0 ? applied : undefined
       };
-      
+
       setChatMessages(prev => [...prev, stanleyMsg]);
     } catch (err: any) {
       const errorMsg: ChatMessage = {

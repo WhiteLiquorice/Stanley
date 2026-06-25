@@ -24,34 +24,39 @@
       },
       {
         "id": "3",
-        "type": "click",
-        "label": "Submit Search",
-        "data": {
-          "description": "Google Search button",
-          "selector": "input[name=\"btnK\"]"
-        },
+        "type": "wait",
+        "label": "Wait for Suggestions",
+        "data": { "ms": "800" },
         "position": { "x": 250, "y": 250 }
       },
       {
         "id": "4",
-        "type": "wait",
-        "label": "Wait for Results",
-        "data": { "ms": "3000" },
+        "type": "navigate",
+        "label": "Submit via URL",
+        "data": { "url": "https://www.google.com/search?q=Project+Stanley+enterprise+automation" },
         "position": { "x": 250, "y": 350 }
       },
       {
         "id": "5",
-        "type": "scrape",
-        "label": "Scrape Text",
-        "data": { "selector": "#search" },
+        "type": "wait",
+        "label": "Wait for Results",
+        "data": { "ms": "2000" },
         "position": { "x": 250, "y": 450 }
+      },
+      {
+        "id": "6",
+        "type": "scrape",
+        "label": "Scrape Results",
+        "data": { "selector": "#search" },
+        "position": { "x": 250, "y": 550 }
       }
     ],
     "edges": [
       { "source": "1", "target": "2" },
       { "source": "2", "target": "3" },
       { "source": "3", "target": "4" },
-      { "source": "4", "target": "5" }
+      { "source": "4", "target": "5" },
+      { "source": "5", "target": "6" }
     ]
   },
   {
@@ -69,27 +74,35 @@
       },
       {
         "id": "2",
+        "type": "wait",
+        "label": "Wait for Page Load",
+        "data": { "ms": "2000" },
+        "position": { "x": 250, "y": 150 }
+      },
+      {
+        "id": "3",
         "type": "scrape",
         "label": "Scrape Headlines",
         "data": {
           "selector": "article"
         },
-        "position": { "x": 250, "y": 150 }
+        "position": { "x": 250, "y": 250 }
       },
       {
-        "id": "3",
+        "id": "4",
         "type": "ai_prompt",
         "label": "Summarize with AI",
         "data": {
-          "prompt": "Please summarize the following Google News headlines into 5 concise bullet points, focusing on the most important stories:\n\n{{2}}",
+          "prompt": "Please summarize the following Google News headlines into 5 concise bullet points, focusing on the most important stories:\n\n{{3}}",
           "system": "You are a news summarization assistant. Be concise and clear."
         },
-        "position": { "x": 250, "y": 250 }
+        "position": { "x": 250, "y": 350 }
       }
     ],
     "edges": [
       { "source": "1", "target": "2" },
-      { "source": "2", "target": "3" }
+      { "source": "2", "target": "3" },
+      { "source": "3", "target": "4" }
     ]
   },
   {
@@ -100,20 +113,20 @@
         "id": "1",
         "type": "trigger",
         "label": "Trigger Start",
-        "data": { "url": "https://www.amazon.com" },
+        "data": { "url": "https://www.amazon.com/s?k=iphone+15+case" },
         "position": { "x": 250, "y": 50 }
       },
       {
         "id": "2",
-        "type": "navigate",
-        "label": "Amazon Search",
-        "data": { "url": "https://www.amazon.com/s?k={{product}}" },
+        "type": "wait",
+        "label": "Wait for Amazon",
+        "data": { "ms": "2500" },
         "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
         "type": "scrape",
-        "label": "Scrape Amazon Results",
+        "label": "Scrape Amazon Prices",
         "data": { "selector": "span.a-price-whole" },
         "position": { "x": 250, "y": 250 }
       },
@@ -121,25 +134,32 @@
         "id": "4",
         "type": "navigate",
         "label": "eBay Search",
-        "data": { "url": "https://www.ebay.com/sch/i.html?_nkw={{product}}" },
+        "data": { "url": "https://www.ebay.com/sch/i.html?_nkw=iphone+15+case" },
         "position": { "x": 250, "y": 350 }
       },
       {
         "id": "5",
-        "type": "scrape",
-        "label": "Scrape eBay Results",
-        "data": { "selector": ".s-item__price" },
+        "type": "wait",
+        "label": "Wait for eBay",
+        "data": { "ms": "2500" },
         "position": { "x": 250, "y": 450 }
       },
       {
         "id": "6",
+        "type": "scrape",
+        "label": "Scrape eBay Prices",
+        "data": { "selector": ".s-item__price" },
+        "position": { "x": 250, "y": 550 }
+      },
+      {
+        "id": "7",
         "type": "ai_prompt",
         "label": "AI Price Analysis",
         "data": {
-          "prompt": "Amazon price matches: {{3}}\neBay price matches: {{5}}\nEvaluate the prices for '{{product}}' and summarize which platform is cheaper and the typical price range.",
-          "system": "You are a shopping comparison agent."
+          "prompt": "Amazon prices found: {{3}}\neBay prices found: {{6}}\nCompare these prices for 'iPhone 15 case' and summarize which platform is cheaper and the typical price range. Be specific.",
+          "system": "You are a shopping price comparison agent. Provide clear, actionable insights."
         },
-        "position": { "x": 250, "y": 550 }
+        "position": { "x": 250, "y": 650 }
       }
     ],
     "edges": [
@@ -147,7 +167,8 @@
       { "source": "2", "target": "3" },
       { "source": "3", "target": "4" },
       { "source": "4", "target": "5" },
-      { "source": "5", "target": "6" }
+      { "source": "5", "target": "6" },
+      { "source": "6", "target": "7" }
     ]
   },
   {
@@ -163,25 +184,33 @@
       },
       {
         "id": "2",
-        "type": "scrape",
-        "label": "Scrape Frontpage Headlines",
-        "data": { "selector": "span.titleline" },
+        "type": "wait",
+        "label": "Wait for Page",
+        "data": { "ms": "1500" },
         "position": { "x": 250, "y": 150 }
       },
       {
         "id": "3",
+        "type": "scrape",
+        "label": "Scrape Frontpage Headlines",
+        "data": { "selector": "span.titleline" },
+        "position": { "x": 250, "y": 250 }
+      },
+      {
+        "id": "4",
         "type": "ai_prompt",
         "label": "Extract Tech Startups",
         "data": {
-          "prompt": "Read the following Hacker News headlines and extract start-up launches, new open-source projects, or hiring posts:\n\n{{2}}",
-          "system": "You are a lead generation research assistant."
+          "prompt": "Read the following Hacker News headlines and extract start-up launches, new open-source projects, or hiring posts. Format as a numbered list with brief descriptions:\n\n{{3}}",
+          "system": "You are a lead generation research assistant. Be specific and extract only real launch/project/hiring posts."
         },
-        "position": { "x": 250, "y": 250 }
+        "position": { "x": 250, "y": 350 }
       }
     ],
     "edges": [
       { "source": "1", "target": "2" },
-      { "source": "2", "target": "3" }
+      { "source": "2", "target": "3" },
+      { "source": "3", "target": "4" }
     ]
   }
 ]
