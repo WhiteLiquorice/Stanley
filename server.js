@@ -309,23 +309,28 @@ app.post('/api/record/cancel', async (req, res) => {
 app.post('/api/ai/chat', async (req, res) => {
   const { message, workflow, history } = req.body;
   
-  // 1. Get API Key from environment or vault.json
+  // 1. Get API Keys from environment or vault.json
   let apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    const secrets = readData(VAULT_FILE);
-    const googleSecret = secrets.find(s => s.name === 'Google API Key' || s.id === '2');
-    if (googleSecret && googleSecret.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
-      apiKey = googleSecret.value;
-    }
+  let lmStudioKey = null;
+  const secrets = readData(VAULT_FILE);
+  
+  const googleSecret = secrets.find(s => s.name === 'Google API Key' || s.id === '2');
+  if (googleSecret && googleSecret.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
+    apiKey = googleSecret.value;
   }
   
-  if (!apiKey) {
+  const lmSecret = secrets.find(s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio'));
+  if (lmSecret && lmSecret.value) {
+    lmStudioKey = lmSecret.value;
+  }
+  
+  if (!apiKey && !lmStudioKey) {
     return res.status(400).json({ 
-      error: 'Google Gemini API Key is missing. Please add a valid API key named "Google API Key" in your Credential Vault first.' 
+      error: 'Google Gemini API Key or LM Studio Key is missing. Please add a valid API key in your Credential Vault first.' 
     });
   }
 
-  // 2. Call Gemini
+  // 2. Call AI
   try {
     const systemInstruction = `You are "Stanley", the AI Copilot for Project Stanley, an enterprise browser automation suite.
 Your goal is to help the user build, edit, and understand their low-code browser automation workflows.
@@ -372,43 +377,83 @@ Rules:
 - If the user asks a general question, explain it clearly in "message" and leave "actions" empty.
 - Always output valid, parseable JSON. Do not include markdown code block formatting (like \`\`\`json) in your raw response body, just output the raw JSON string.`;
 
-    const contents = [];
-    if (history && Array.isArray(history)) {
-      history.forEach(h => {
-        contents.push({
-          role: h.role === 'user' ? 'user' : 'model',
-          parts: [{ text: h.content }]
-        });
-      });
-    }
-    
-    // Add current context
     const currentContext = `Current Workflow State: ${JSON.stringify(workflow || null)}\n\nUser Request: ${message}`;
-    contents.push({
-      role: 'user',
-      parts: [{ text: currentContext }]
-    });
+    let resultText = '{}';
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: contents,
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: {
-          responseMimeType: "application/json"
-        }
-      })
-    });
+    if (lmStudioKey) {
+      // Call LM Studio OpenAI-compatible completions
+      const messages = [
+        { role: 'system', content: systemInstruction }
+      ];
+      if (history && Array.isArray(history)) {
+        history.forEach(h => {
+          messages.push({
+            role: h.role === 'user' ? 'user' : 'assistant',
+            content: h.content
+          });
+        });
+      }
+      messages.push({ role: 'user', content: currentContext });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(500).json({ error: `Gemini API error: ${errText}` });
+      const lmUrl = 'http://localhost:1234/v1/chat/completions';
+      const lmResponse = await fetch(lmUrl, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
+        },
+        body: JSON.stringify({
+          model: 'local-model',
+          messages,
+          temperature: 0.2
+        })
+      });
+
+      if (!lmResponse.ok) {
+        const errText = await lmResponse.text();
+        return res.status(500).json({ error: `LM Studio API error: ${errText}` });
+      }
+
+      const data = await lmResponse.json();
+      resultText = data.choices?.[0]?.message?.content || '{}';
+    } else {
+      // Call Gemini
+      const contents = [];
+      if (history && Array.isArray(history)) {
+        history.forEach(h => {
+          contents.push({
+            role: h.role === 'user' ? 'user' : 'model',
+            parts: [{ text: h.content }]
+          });
+        });
+      }
+      contents.push({
+        role: 'user',
+        parts: [{ text: currentContext }]
+      });
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: contents,
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            responseMimeType: "application/json"
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return res.status(500).json({ error: `Gemini API error: ${errText}` });
+      }
+
+      const data = await response.json();
+      resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     }
 
-    const data = await response.json();
-    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     res.json(JSON.parse(resultText));
   } catch (err) {
     res.status(500).json({ error: `Failed to call AI Chat: ${err.message}` });

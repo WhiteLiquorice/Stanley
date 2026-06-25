@@ -178,6 +178,106 @@ const nodeTypes = {
   workflowNode: WorkflowNodeComponent
 };
 
+const mapActionsToGraph = (actions: any[]) => {
+  const nodes: any[] = [];
+  const edges: any[] = [];
+  
+  // Find first URL to set the trigger node
+  let triggerUrl = 'https://google.com';
+  const firstNavigate = actions.find(a => a.action === 'navigate' || a.action === 'trigger');
+  if (firstNavigate?.url) {
+    triggerUrl = firstNavigate.url;
+  }
+  
+  // Add initial trigger node
+  nodes.push({
+    id: '1',
+    type: 'trigger',
+    label: 'Start Trigger',
+    data: { url: triggerUrl },
+    position: { x: 250, y: 50 }
+  });
+  
+  let currentY = 190;
+  let nodeCount = 2;
+  
+  actions.forEach((a) => {
+    // If it was the first navigate, skip adding it as a separate node since it's already the trigger
+    if (a === firstNavigate) return;
+    
+    let nodeType = '';
+    let label = '';
+    let data: any = {};
+    
+    switch (a.action) {
+      case 'navigate':
+        nodeType = 'navigate';
+        label = `Navigate to ${a.url}`;
+        data = { url: a.url };
+        break;
+      case 'click':
+        nodeType = 'click';
+        label = `Click "${a.description}"`;
+        data = { description: a.description, selector: a.selector || '' };
+        break;
+      case 'type':
+        nodeType = 'type';
+        label = `Type "${a.value}"`;
+        data = { description: a.description, value: a.value, selector: a.selector || '' };
+        break;
+      case 'wait':
+        nodeType = 'wait';
+        label = `Wait ${a.ms || a.duration || 1000}ms`;
+        data = { ms: String(a.ms || a.duration || 1000) };
+        break;
+      case 'scrape':
+        nodeType = 'scrape';
+        label = 'Scrape content';
+        data = { selector: a.selector || '' };
+        break;
+      case 'open_tab':
+        nodeType = 'open_tab';
+        label = 'Open Tab';
+        data = { url: a.url || '', label: '' };
+        break;
+      case 'switch_tab':
+        nodeType = 'switch_tab';
+        label = `Switch to Tab ${a.index}`;
+        data = { tab: String(a.index) };
+        break;
+      case 'close_tab':
+        nodeType = 'close_tab';
+        label = `Close Tab ${a.index}`;
+        data = { tab: String(a.index) };
+        break;
+      default:
+        return; // skip unknown
+    }
+    
+    const nodeId = String(nodeCount++);
+    nodes.push({
+      id: nodeId,
+      type: nodeType,
+      label,
+      data,
+      position: { x: 250, y: currentY }
+    });
+    
+    // Connect to previous node
+    const prevId = String(nodeCount - 2);
+    edges.push({
+      id: `e-${prevId}-${nodeId}`,
+      source: prevId,
+      target: nodeId,
+      type: 'smoothstep'
+    });
+    
+    currentY += 140;
+  });
+  
+  return { nodes, edges };
+};
+
 export function CockpitInner() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -218,12 +318,15 @@ export function CockpitInner() {
     content: string;
     actionsApplied?: string[];
   }
-  const [showChat, setShowChat] = useState(false);
+  const [showChat, setShowChat] = useState(true);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: '1', role: 'stanley', content: 'Hi! I\'m Stanley, your automation copilot. Tell me what you want to automate, or ask me to add/edit steps in your flow!' }
   ]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [generatePrompt, setGeneratePrompt] = useState('');
+  const [generatingFlow, setGeneratingFlow] = useState(false);
+  const [usingLmStudio, setUsingLmStudio] = useState(false);
 
   const [extensionActive, setExtensionActive] = useState(false);
   const [nativeRunning, setNativeRunning] = useState(false);
@@ -344,6 +447,19 @@ export function CockpitInner() {
       const runData = await runsRes.json();
       setWorkflows(wfs);
       setRuns(runData);
+      
+      try {
+        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(2000) });
+        if (vaultRes.ok) {
+          const secrets: any[] = await vaultRes.json();
+          const lmSecret = secrets.find(
+            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
+          );
+          setUsingLmStudio(!!lmSecret?.value);
+        }
+      } catch {
+        // Ignore offline vault errors
+      }
     } catch (err) {
       console.error('Error fetching data:', err);
     } finally {
@@ -595,9 +711,9 @@ export function CockpitInner() {
     setChatLoading(true);
 
     try {
-      // Step 1: Get the Gemini API key from the local vault server.
-      // If the server is offline, give a clear, actionable error instead of a cryptic JSON parse failure.
+      // Step 1: Get the API keys from the local vault server.
       let apiKey: string | null = null;
+      let lmStudioKey: string | null = null;
       try {
         const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(3000) });
         if (vaultRes.ok) {
@@ -608,19 +724,25 @@ export function CockpitInner() {
           if (googleSecret?.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
             apiKey = googleSecret.value;
           }
+          const lmSecret = secrets.find(
+            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
+          );
+          if (lmSecret?.value) {
+            lmStudioKey = lmSecret.value;
+          }
         }
       } catch {
-        // Server offline — fall through to show helpful message
+        // Server offline
       }
 
-      if (!apiKey) {
+      if (!apiKey && !lmStudioKey) {
         throw new Error(
-          'Stanley needs a Gemini API key to chat. Make sure the backend server is running ' +
-          '(npm run dev:backend) and add a real "Google API Key" in the Credential Vault.'
+          'Stanley needs a Gemini API key or LM Studio key to chat. Make sure the backend server is running ' +
+          '(npm run dev:backend) and add a valid key in the Credential Vault.'
         );
       }
 
-      // Step 2: Build the Gemini request directly from the frontend.
+      // Step 2: Build request directly.
       const systemInstruction = `You are "Stanley", the AI Copilot for Project Stanley, an enterprise browser automation suite.
 Your goal is to help the user build, edit, and understand their low-code browser automation workflows.
 You must respond in strict JSON matching this schema:
@@ -664,34 +786,73 @@ Rules:
 - If the user asks a general question, answer in "message" and leave "actions" empty.
 - Always output valid, parseable JSON. Do NOT wrap in markdown code fences.`;
 
-      const contents: any[] = [];
-      chatMessages.forEach(m => {
-        contents.push({
-          role: m.role === 'user' ? 'user' : 'model',
-          parts: [{ text: m.content }]
-        });
-      });
       const currentContext = `Current Workflow State: ${JSON.stringify(selectedWorkflow || null)}\n\nUser Request: ${text}`;
-      contents.push({ role: 'user', parts: [{ text: currentContext }] });
+      let resultText = '{}';
 
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const geminiRes = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          generationConfig: { responseMimeType: 'application/json' }
-        })
-      });
+      if (lmStudioKey) {
+        // Call LM Studio OpenAI-compatible completions
+        const lmUrl = 'http://localhost:1234/v1/chat/completions';
+        const messages = [
+          { role: 'system', content: systemInstruction }
+        ];
+        chatMessages.forEach(m => {
+          messages.push({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content
+          });
+        });
+        messages.push({ role: 'user', content: currentContext });
 
-      if (!geminiRes.ok) {
-        const errText = await geminiRes.text();
-        throw new Error(`Gemini API error: ${errText}`);
+        const lmRes = await fetch(lmUrl, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
+          },
+          body: JSON.stringify({
+            model: 'local-model',
+            messages,
+            temperature: 0.2
+          })
+        });
+
+        if (!lmRes.ok) {
+          const errText = await lmRes.text();
+          throw new Error(`LM Studio error: ${errText}`);
+        }
+
+        const lmData = await lmRes.json();
+        resultText = lmData.choices?.[0]?.message?.content || '{}';
+      } else {
+        // Call Gemini
+        const contents: any[] = [];
+        chatMessages.forEach(m => {
+          contents.push({
+            role: m.role === 'user' ? 'user' : 'model',
+            parts: [{ text: m.content }]
+          });
+        });
+        contents.push({ role: 'user', parts: [{ text: currentContext }] });
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+        const geminiRes = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents,
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            generationConfig: { responseMimeType: 'application/json' }
+          })
+        });
+
+        if (!geminiRes.ok) {
+          const errText = await geminiRes.text();
+          throw new Error(`Gemini API error: ${errText}`);
+        }
+
+        const geminiData = await geminiRes.json();
+        resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       }
-
-      const geminiData = await geminiRes.json();
-      const resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       let parsed: any = {};
       try {
         parsed = JSON.parse(resultText);
@@ -751,6 +912,158 @@ Rules:
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleGenerateFlow = async () => {
+    const prompt = generatePrompt.trim();
+    if (!prompt) return;
+
+    setGeneratingFlow(true);
+    try {
+      // Step 1: Get API keys
+      let apiKey: string | null = null;
+      let lmStudioKey: string | null = null;
+      try {
+        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(3000) });
+        if (vaultRes.ok) {
+          const secrets: any[] = await vaultRes.json();
+          const googleSecret = secrets.find(
+            s => s.name === 'Google API Key' || s.name?.toLowerCase().includes('gemini')
+          );
+          if (googleSecret?.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
+            apiKey = googleSecret.value;
+          }
+          const lmSecret = secrets.find(
+            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
+          );
+          if (lmSecret?.value) {
+            lmStudioKey = lmSecret.value;
+          }
+        }
+      } catch {
+        // ignore offline
+      }
+
+      const isLm = !!lmStudioKey;
+      
+      const compileSystemInstruction = `You are the brain of Project Stanley, a local browser automation butler.
+Your task is to take a natural language request from a user and translate it into a structured, step-by-step sequence of automation actions in JSON format.
+
+Available actions you can output:
+1. navigate: Goto a URL in the current tab. Keys: "action": "navigate", "url": "URL string"
+2. click: Click on a specific element. Keys: "action": "click", "description": "Short plain English description of what element to click"
+3. type: Type text into an input field. Keys: "action": "type", "description": "Short description of the input field to type into", "value": "Text value to type"
+4. wait: Wait for a specific duration in milliseconds. Keys: "action": "wait", "ms": number of milliseconds
+5. scrape: Scrape structured visible text content from the current tab. Keys: "action": "scrape", "selector": "Optional CSS selector to scope scrape to"
+6. open_tab: Open a new browser tab and optionally navigate to a URL. Keys: "action": "open_tab", "url": "Optional URL string". Returns a new tab index (0-based) you can use with switch_tab.
+7. switch_tab: Switch the active browser tab to a different tab by index. Keys: "action": "switch_tab", "index": number (0-indexed, where 0 is the first tab opened)
+8. close_tab: Close a browser tab by index. Keys: "action": "close_tab", "index": number (0-indexed)
+
+Multi-tab guidance:
+- Tabs are indexed starting at 0. The initial tab opened is always index 0.
+- Use open_tab to open a new tab (optionally with a URL), then switch_tab to go back to a previous tab.
+- When scraping multiple URLs, open each in a new tab, switch to it, scrape, then switch to the next.
+
+Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fences or backticks. Start with [ and end with ].`;
+
+      let resultText = '[]';
+      if (isLm) {
+        // Use LM Studio
+        const lmUrl = 'http://localhost:1234/v1/chat/completions';
+        const lmRes = await fetch(lmUrl, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
+          },
+          body: JSON.stringify({
+            model: 'local-model',
+            messages: [
+              { role: 'system', content: compileSystemInstruction },
+              { role: 'user', content: `Translate this user prompt into a structured workflow:\n"${prompt}"` }
+            ],
+            temperature: 0.1
+          })
+        });
+
+        if (!lmRes.ok) {
+          const errText = await lmRes.text();
+          throw new Error(`LM Studio compile error: ${errText}`);
+        }
+
+        const lmData = await lmRes.json();
+        resultText = lmData.choices?.[0]?.message?.content || '[]';
+      } else {
+        // Use Gemini
+        if (!apiKey) {
+          throw new Error(
+            'Stanley needs a Gemini API key or an LM Studio key to compile a flow. Make sure the backend server is running ' +
+            'and add a key in the Credential Vault.'
+          );
+        }
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+        const geminiRes = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: `Translate this user prompt into a structured workflow:\n"${prompt}"` }] }],
+            systemInstruction: { parts: [{ text: compileSystemInstruction }] },
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1
+            }
+          })
+        });
+
+        if (!geminiRes.ok) {
+          const errText = await geminiRes.text();
+          throw new Error(`Gemini API compile error: ${errText}`);
+        }
+
+        const geminiData = await geminiRes.json();
+        resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+      }
+
+      // Clean up markdown block if returned
+      const cleanJson = resultText.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+      const actions = JSON.parse(cleanJson);
+      
+      if (!Array.isArray(actions) || actions.length === 0) {
+        throw new Error('AI did not return a valid list of workflow actions.');
+      }
+
+      // Map actions to React Flow nodes and edges
+      const mapped = mapActionsToGraph(actions);
+
+      // Create new workflow in backend
+      const newWfName = `AI: ${prompt.length > 30 ? prompt.substring(0, 27) + '...' : prompt}`;
+      const newWf: Workflow = {
+        id: Math.random().toString(36).substring(2, 9),
+        name: newWfName,
+        nodes: mapped.nodes,
+        edges: mapped.edges
+      };
+
+      const saveRes = await fetch(`${API_URL}/workflows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newWf)
+      });
+
+      if (saveRes.ok) {
+        setWorkflows(prev => [...prev, newWf]);
+        setGeneratePrompt('');
+        loadWorkflowInEditor(newWf);
+      } else {
+        throw new Error('Failed to save the generated workflow.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(`Failed to generate flow: ${err.message}`);
+    } finally {
+      setGeneratingFlow(false);
     }
   };
 
@@ -1125,9 +1438,16 @@ Rules:
           <h1>Automation Cockpit</h1>
           <p>Monitor, design, and execute your visual flow automations.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-          <Plus size={16} /> New Automation
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {!showChat && (
+            <button className="btn btn-secondary animate-fade-in" onClick={() => setShowChat(true)}>
+              <Sparkles size={16} style={{ marginRight: '4px', color: '#a855f7' }} /> Open Copilot
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+            <Plus size={16} /> New Automation
+          </button>
+        </div>
       </div>
 
       <div className="stats-grid">
@@ -1152,9 +1472,9 @@ Rules:
         </div>
       </div>
 
-      <div className="editor-workspace" style={{ marginTop: '1.5rem', height: 'calc(100vh - 280px)', overflow: 'hidden' }}>
-        {/* Left Side: Monitor, Saved workflows list and logs history */}
-        <div className="glass-panel" style={{ width: '45%', display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
+      <div className="editor-workspace" style={{ marginTop: '1.5rem', height: 'calc(100vh - 280px)', overflow: 'hidden', display: 'flex', gap: '1rem' }}>
+        {/* Left Column: Monitor, Saved workflows list and logs history */}
+        <div className="glass-panel" style={{ width: '27%', display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
           {/* Workflows Directory */}
           <div className="data-table-container">
             <h3 style={{ marginBottom: '0.75rem', fontSize: '0.95rem', borderBottom: '1px solid var(--border-strong)', paddingBottom: '0.5rem' }}>Workflows Directory</h3>
@@ -1237,8 +1557,60 @@ Rules:
           </div>
         </div>
 
-        {/* Right Side: Split-screen visual editor graph */}
-        <div style={{ width: '55%', display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%' }}>
+        {/* Center Column: Visual editor graph / Generator Card */}
+        <div style={{ width: showChat ? '48%' : '73%', display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', transition: 'width 0.2s ease-in-out' }}>
+          {/* Build Your Flow Card */}
+          <div className="glass-panel" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+              <Sparkles size={14} style={{ color: '#3b82f6' }} />
+              <h3 style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600 }}>Build Your Flow with AI</h3>
+            </div>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-text-secondary)', margin: 0 }}>
+              Describe your automation in plain English. Stanley will automatically generate a complete visual node graph for you.
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+              <input 
+                type="text" 
+                className="form-input" 
+                placeholder="e.g., Navigate to amazon.com, type 'iPhone 15 case', wait 3 seconds, then scrape results" 
+                style={{ fontSize: '0.75rem', padding: '5px 8px' }}
+                value={generatePrompt}
+                onChange={(e) => setGeneratePrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleGenerateFlow();
+                  }
+                }}
+                disabled={generatingFlow}
+              />
+              <button 
+                className="btn btn-primary" 
+                style={{ 
+                  background: 'linear-gradient(135deg, #3b82f6 0%, #a855f7 100%)', 
+                  border: 'none', 
+                  fontSize: '0.75rem',
+                  padding: '4px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  whiteSpace: 'nowrap'
+                }}
+                onClick={handleGenerateFlow}
+                disabled={generatingFlow || !generatePrompt.trim()}
+              >
+                {generatingFlow ? (
+                  <>
+                    <Loader className="spinner" size={10} /> Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={10} /> Generate
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
           {selectedWorkflow ? (
             <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
               <div className="editor-header" style={{ borderBottom: '1px solid var(--border-strong)', padding: '0.5rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1292,106 +1664,6 @@ Rules:
                     <Controls />
                   </ReactFlow>
                 </div>
-
-                {/* Chatbot sidebar panel */}
-                {showChat && (
-                  <div className="chatbot-sidebar">
-                    <div className="chat-header">
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#a855f7' }}>
-                        <Sparkles size={16} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Stanley Copilot</span>
-                      </div>
-                      <button 
-                        style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer' }}
-                        onClick={() => setShowChat(false)}
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-
-                    <div className="chat-messages">
-                      {chatMessages.map((msg) => (
-                        <div key={msg.id} className={`chat-message ${msg.role}`}>
-                          <div className={`chat-avatar ${msg.role}`}>
-                            {msg.role === 'stanley' ? 'S' : 'U'}
-                          </div>
-                          <div>
-                            <div className="chat-bubble">
-                              {msg.content}
-                              
-                              {msg.actionsApplied && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
-                                  {msg.actionsApplied.map((log, index) => (
-                                    <span key={index} className="action-badge">
-                                      ✓ {log}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      {chatLoading && (
-                        <div className="chat-message stanley">
-                          <div className="chat-avatar stanley">S</div>
-                          <div className="chat-bubble" style={{ minWidth: '60px' }}>
-                            <div className="typing-indicator">
-                              <div className="typing-dot" />
-                              <div className="typing-dot" />
-                              <div className="typing-dot" />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="chat-suggestions">
-                      <button 
-                        className="suggestion-chip" 
-                        onClick={() => handleSendChatMessage('Create a google search automation flow')}
-                      >
-                        🔍 Google Search Flow
-                      </button>
-                      <button 
-                        className="suggestion-chip" 
-                        onClick={() => handleSendChatMessage('Add a wait node for 3 seconds')}
-                      >
-                        ⏱️ Add 3s Wait
-                      </button>
-                      <button 
-                        className="suggestion-chip" 
-                        onClick={() => handleSendChatMessage('Write a JS script to scrape article links')}
-                      >
-                        💻 Scrape JS Script
-                      </button>
-                    </div>
-
-                    <div className="chat-input-container">
-                      <input 
-                        type="text" 
-                        className="chat-input"
-                        placeholder="Ask Stanley to help..."
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            handleSendChatMessage();
-                          }
-                        }}
-                        disabled={chatLoading}
-                      />
-                      <button 
-                        className="btn btn-primary" 
-                        style={{ padding: '4px 10px', fontSize: '0.8rem', background: '#a855f7', borderColor: '#a855f7' }}
-                        onClick={() => handleSendChatMessage()}
-                        disabled={chatLoading}
-                      >
-                        Send
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Node properties bottom sheet */}
@@ -1686,11 +1958,113 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               <GitFork size={48} style={{ marginBottom: '1rem', color: 'var(--border-strong)' }} />
               <h3>No Workflow Selected</h3>
               <p style={{ fontSize: '0.85rem', maxWidth: '300px', margin: '0.5rem auto 0 auto' }}>
-                Select a workflow from the directory on the left to display its interactive visual node graph and properties.
+                Select a workflow from the directory on the left or type a prompt above to auto-generate a new one!
               </p>
             </div>
           )}
         </div>
+
+        {/* Right Column: Stanley Copilot (Always Visible!) */}
+        {showChat && (
+          <div className="glass-panel chatbot-sidebar" style={{ width: '25%', display: 'flex', flexDirection: 'column', height: '100%', padding: '0', overflow: 'hidden' }}>
+            <div className="chat-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#a855f7' }}>
+                <Sparkles size={16} />
+                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                  Stanley Copilot {usingLmStudio ? '(LM Studio)' : '(Gemini)'}
+                </span>
+              </div>
+              <button 
+                style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer' }}
+                onClick={() => setShowChat(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="chat-messages">
+              {chatMessages.map((msg) => (
+                <div key={msg.id} className={`chat-message ${msg.role}`}>
+                  <div className={`chat-avatar ${msg.role}`}>
+                    {msg.role === 'stanley' ? 'S' : 'U'}
+                  </div>
+                  <div>
+                    <div className="chat-bubble">
+                      {msg.content}
+                      
+                      {msg.actionsApplied && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
+                          {msg.actionsApplied.map((log, index) => (
+                            <span key={index} className="action-badge">
+                              ✓ {log}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="chat-message stanley">
+                  <div className="chat-avatar stanley">S</div>
+                  <div className="chat-bubble" style={{ minWidth: '60px' }}>
+                    <div className="typing-indicator">
+                      <div className="typing-dot" />
+                      <div className="typing-dot" />
+                      <div className="typing-dot" />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="chat-suggestions">
+              <button 
+                className="suggestion-chip" 
+                onClick={() => handleSendChatMessage('Create a google search automation flow')}
+              >
+                🔍 Google Search Flow
+              </button>
+              <button 
+                className="suggestion-chip" 
+                onClick={() => handleSendChatMessage('Add a wait node for 3 seconds')}
+              >
+                ⏱️ Add 3s Wait
+              </button>
+              <button 
+                className="suggestion-chip" 
+                onClick={() => handleSendChatMessage('Write a JS script to scrape article links')}
+              >
+                💻 Scrape JS Script
+              </button>
+            </div>
+
+            <div className="chat-input-container">
+              <input 
+                type="text" 
+                className="chat-input"
+                placeholder="Ask Stanley to help..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSendChatMessage();
+                  }
+                }}
+                disabled={chatLoading}
+              />
+              <button 
+                className="btn btn-primary" 
+                style={{ padding: '4px 10px', fontSize: '0.8rem', background: '#a855f7', borderColor: '#a855f7' }}
+                onClick={() => handleSendChatMessage()}
+                disabled={chatLoading}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Create Workflow Modal */}
