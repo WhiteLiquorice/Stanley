@@ -216,7 +216,7 @@ Guidelines:
 
 Output ONLY the raw JSON block. No markdown wrapper.`;
 
-    const model = this.geminiClient.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = this.geminiClient.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
     try {
       const response = await model.generateContent([
