@@ -1,48 +1,24 @@
 /**
  * background.js — Stanley service worker, browser-native orchestrator.
- *
- * Stanley no longer NEEDS a local daemon to execute workflows. This worker runs the
- * same branching engine the Editor builds against, driving the page through
- * chrome.debugger (real isTrusted input) + content.js. The native-messaging daemon is
- * kept as an OPTIONAL path for users who want headless / Playwright-only features, but
- * it is no longer auto-connected (so users with no daemon see no errors).
- *
- * Pieces loaded below:
- *   - branchingEngine.js  → executeGraph (reused verbatim via a CommonJS shim)
- *   - cdpDriver.js        → self.StanleyCDP   (chrome.debugger wrapper)
- *   - nativeAgent.js      → self.StanleyNativeAgent (Playwright-shaped, CDP-backed)
- *   - tokenManager.js     → self.StanleyAuth  (Firebase token refresh, unchanged)
+ * ES module (manifest: "type": "module").
  */
 
-// branchingEngine.js is authored as a CommonJS module (module.exports = {...}) so it
-// can be shared with the Node daemon. Shim module/exports so importScripts can load the
-// EXACT same file here — single source of truth for the branching logic.
-self.module = { exports: {} };
-self.exports = self.module.exports;
-importScripts('branchingEngine.js');
-const { executeGraph } = self.module.exports;
-delete self.module;
-delete self.exports;
+import { executeGraph } from './branchingEngine.js';
+import { StanleyCDP } from './cdpDriver.js';
+import { StanleyNativeAgent } from './nativeAgent.js';
+import { StanleyAuth } from './tokenManager.js';
 
-importScripts('cdpDriver.js');
-importScripts('nativeAgent.js');
-importScripts('tokenManager.js');
-
-// ── Keepalive: only while a workflow is running ────────────────────────────────────
-// Primary keepalive is the worker's own message traffic to content.js during the run
-// (every step messages the page; long `wait` nodes chunk-ping — see nativeAgent.wait).
-// This alarm is a backup that wakes the worker if it's evicted between steps; it exists
-// ONLY during a run so we don't pin the worker awake while the user is just browsing.
+// ── Keepalive alarm ────────────────────────────────────────────────────────────
 chrome.alarms.onAlarm.addListener(() => { /* waking is the whole point */ });
 function startKeepaliveAlarm() { chrome.alarms.create('stanley-keepalive', { periodInMinutes: 0.4 }); }
-function stopKeepaliveAlarm() { chrome.alarms.clear('stanley-keepalive'); }
+function stopKeepaliveAlarm()  { chrome.alarms.clear('stanley-keepalive'); }
 
-// ── Run state ───────────────────────────────────────────────────────────────────
-let workflowRunning = false;
-let runningPrompt = '';
-let currentAgent = null;
-let cancelRequested = false;
-let lastLog = 'Idle';
+// ── Run state ──────────────────────────────────────────────────────────────────
+let workflowRunning    = false;
+let runningPrompt      = '';
+let currentAgent       = null;
+let cancelRequested    = false;
+let lastLog            = 'Idle';
 let currentEditorTabId = null;
 
 function pushLog(line) {
@@ -52,11 +28,10 @@ function pushLog(line) {
     chrome.tabs.sendMessage(currentEditorTabId, {
       ns: 'stanley-extension-event',
       action: 'native_log',
-      log: line
+      log: line,
     }).catch(() => { currentEditorTabId = null; });
   }
 }
-
 
 function recordHistory(prompt, status, extra) {
   chrome.storage.local.get(['stanley_history'], (data) => {
@@ -67,20 +42,17 @@ function recordHistory(prompt, status, extra) {
   });
 }
 
-/**
- * Runs a compiled workflow graph natively in the user's browser.
- * @param {object} workflow { nodes, edges }
- * @param {object} secrets  vault id/name -> value (resolves `vault:` typed values)
- * @param {object} opts     { fallbackToDispatch }
- */
 async function runNativeWorkflow(workflow, secrets, opts = {}) {
   if (workflowRunning) throw new Error('A workflow is already running.');
-  workflowRunning = true;
-  cancelRequested = false;
-  runningPrompt = workflow.name || 'Workflow';
+  workflowRunning  = true;
+  cancelRequested  = false;
+  runningPrompt    = workflow.name || 'Workflow';
   startKeepaliveAlarm();
 
-  const agent = new StanleyNativeAgent({ onLog: pushLog, fallbackToDispatch: !!opts.fallbackToDispatch });
+  const agent = new StanleyNativeAgent({
+    onLog: pushLog,
+    fallbackToDispatch: !!opts.fallbackToDispatch,
+  });
   currentAgent = agent;
 
   try {
@@ -90,8 +62,6 @@ async function runNativeWorkflow(workflow, secrets, opts = {}) {
     const scraped = await executeGraph(agent, workflow, {
       onLog: pushLog,
       secrets: secrets || {},
-      // Headful by definition — the page is the user's own tab. On a block, surface it
-      // and poll until the user (or the site) clears it, then continue.
       onBlocked: async (block, label) => {
         pushLog(`${label} ${block.hint} — waiting for you to resolve it…`);
         chrome.runtime.sendMessage({ action: 'pause_request', hint: block.hint }).catch(() => {});
@@ -99,7 +69,7 @@ async function runNativeWorkflow(workflow, secrets, opts = {}) {
           type: 'basic', iconUrl: 'icon.png', title: 'Stanley needs you',
           message: 'A CAPTCHA or prompt is blocking the workflow. Solve it in the tab to continue.',
         });
-        for (let i = 0; i < 60; i++) { // up to ~5 min
+        for (let i = 0; i < 60; i++) {
           if (cancelRequested) throw new Error('Cancelled while blocked.');
           await agent.wait(5000);
           const still = await agent.isPageBlocked();
@@ -124,7 +94,7 @@ async function runNativeWorkflow(workflow, secrets, opts = {}) {
         ns: 'stanley-extension-event',
         action: 'native_complete',
         result: scraped,
-        prompt: runningPrompt
+        prompt: runningPrompt,
       }).catch(() => { currentEditorTabId = null; });
     }
     return scraped;
@@ -140,20 +110,20 @@ async function runNativeWorkflow(workflow, secrets, opts = {}) {
       chrome.tabs.sendMessage(currentEditorTabId, {
         ns: 'stanley-extension-event',
         action: 'native_failed',
-        error: err.message
+        error: err.message,
       }).catch(() => { currentEditorTabId = null; });
     }
     throw err;
   } finally {
     await agent.cleanup().catch(() => {});
-    currentAgent = null;
-    workflowRunning = false;
-    runningPrompt = '';
+    currentAgent       = null;
+    workflowRunning    = false;
+    runningPrompt      = '';
     stopKeepaliveAlarm();
   }
 }
 
-// ── Optional native-messaging daemon (opt-in, not auto-connected) ──────────────────
+// ── Optional native-messaging daemon (opt-in) ──────────────────────────────────
 let nativePort = null;
 function connectDaemon() {
   if (nativePort) return true;
@@ -171,7 +141,7 @@ function connectDaemon() {
   }
 }
 
-// ── Message API ────────────────────────────────────────────────────────────────────
+// ── Message API ────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   switch (request.action) {
     case 'get_status':
@@ -179,11 +149,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return false;
 
     case 'run_native_workflow':
-      if (sender && sender.tab) {
-        currentEditorTabId = sender.tab.id;
-      }
+      if (sender && sender.tab) currentEditorTabId = sender.tab.id;
       runNativeWorkflow(request.workflow, request.secrets, { fallbackToDispatch: request.fallbackToDispatch })
-        .then(() => {})
         .catch(() => {});
       sendResponse({ started: true });
       return false;
@@ -199,7 +166,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return false;
 
     default:
-      // Unhandled actions fall through (keeps room for daemon-relay messages).
       return false;
   }
 });

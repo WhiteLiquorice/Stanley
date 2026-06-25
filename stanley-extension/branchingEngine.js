@@ -1,37 +1,12 @@
 /**
  * branchingEngine.js — shared branching/conditional-flow logic for Stanley.
- *
- * The original engines (runner.js, foundationAgent.runWorkflow, daemon.runWorkflow)
- * only ever followed the FIRST outgoing edge of a node, so any workflow with a
- * fork, a fallback path, or a loop silently dropped every branch but one.
- *
- * This module adds:
- *   - Conditional edge evaluation (success / failure / contains / exists / true / false)
- *   - Failure-path routing (an `onFailure` edge runs instead of aborting)
- *   - A reusable graph executor (executeGraph) for node/edge workflows
- *   - Flat-array control flow helpers (buildLabelMap) for the daemon's action list
- *   - A hard max-step cap so intentional loops are allowed but runaways are caught
- *
- * CommonJS — consumed by daemon.js / runner.js (Node, no bundler).
+ * ES module. Exports: evaluateCondition, isFailureCondition, pickNextEdge,
+ * buildLabelMap, executeGraph, MAX_STEPS_DEFAULT.
  */
 
-const MAX_STEPS_DEFAULT = 500;
+export const MAX_STEPS_DEFAULT = 500;
 
-/**
- * Condition schema (used on edges via `edge.condition`, on `if`/`condition`
- * nodes via `node.data.condition`, and on flat `if` actions via `step.condition`):
- *
- *   undefined | 'always'            -> always taken
- *   'onSuccess'                     -> taken only if the source node succeeded
- *   'onFailure'                     -> taken only if the source node threw
- *   'true' | 'false'               -> taken to match a preceding condition node result
- *   { type: 'contains',    value } -> last scraped text includes value (case-insensitive)
- *   { type: 'notContains', value }
- *   { type: 'exists',      value } -> an element matching `value` exists on the page (async)
- *   { type: 'notExists',   value }
- *   { type: 'onSuccess' | 'onFailure' | 'always' | 'true' | 'false' }
- */
-async function evaluateCondition(condition, ctx) {
+export async function evaluateCondition(condition, ctx) {
   if (condition === undefined || condition === null) return true;
 
   const type = typeof condition === 'string' ? condition : condition.type;
@@ -40,53 +15,35 @@ async function evaluateCondition(condition, ctx) {
   const needle = String(value == null ? '' : value).toLowerCase();
 
   switch (type) {
-    case 'always':
-      return true;
-    case 'onSuccess':
-      return !ctx.lastError;
-    case 'onFailure':
-      return !!ctx.lastError;
-    case 'true':
-      return ctx.lastConditionResult === true;
-    case 'false':
-      return ctx.lastConditionResult === false;
-    case 'contains':
-      return hay.includes(needle);
-    case 'notContains':
-      return !hay.includes(needle);
+    case 'always':     return true;
+    case 'onSuccess':  return !ctx.lastError;
+    case 'onFailure':  return !!ctx.lastError;
+    case 'true':       return ctx.lastConditionResult === true;
+    case 'false':      return ctx.lastConditionResult === false;
+    case 'contains':   return hay.includes(needle);
+    case 'notContains':return !hay.includes(needle);
     case 'exists':
       return ctx.agent && ctx.agent.elementExists ? await ctx.agent.elementExists(value) : false;
     case 'notExists':
       return ctx.agent && ctx.agent.elementExists ? !(await ctx.agent.elementExists(value)) : true;
     default:
-      // Unknown condition types are treated as unconditional so a typo never
-      // strands the workflow.
       return true;
   }
 }
 
-/** True when an edge/condition is meant to fire only on a failed source node. */
-function isFailureCondition(condition) {
+export function isFailureCondition(condition) {
   const type = typeof condition === 'string' ? condition : (condition && condition.type);
   return type === 'onFailure';
 }
 
-/**
- * Picks the next edge to follow out of a node's outgoing edges.
- *
- *  - If the node FAILED: only edges explicitly marked `onFailure` are eligible.
- *    (Returning null tells the caller the failure is unhandled → abort.)
- *  - If the node SUCCEEDED: failure-only edges are skipped, and the first edge
- *    whose condition evaluates truthy (in array order) wins.
- */
-async function pickNextEdge(outgoingEdges, ctx) {
+export async function pickNextEdge(outgoingEdges, ctx) {
   if (!outgoingEdges || outgoingEdges.length === 0) return null;
 
   if (ctx.lastError) {
     for (const edge of outgoingEdges) {
       if (isFailureCondition(edge.condition)) return edge;
     }
-    return null; // no failure handler → caller re-throws
+    return null;
   }
 
   for (const edge of outgoingEdges) {
@@ -96,31 +53,20 @@ async function pickNextEdge(outgoingEdges, ctx) {
   return null;
 }
 
-/** Maps `{ action:'label', label:'x' }` markers to their index for flat-array goto/if. */
-function buildLabelMap(actions) {
+export function buildLabelMap(actions) {
   const map = {};
   actions.forEach((step, i) => {
     if (step && (step.action === 'label' || step.label) && typeof step.label === 'string') {
-      // A dedicated label marker, OR any action carrying a `label` becomes a jump target.
       if (map[step.label] === undefined) map[step.label] = i;
     }
   });
   return map;
 }
 
-/**
- * Generic node/edge graph executor with conditional branching.
- * Used by runner.js and the enhanced foundation's runWorkflow.
- *
- * @param {object} agent  StanleyFoundationEnhanced instance (already initialized)
- * @param {object} workflow { nodes:[], edges:[] }
- * @param {object} opts { onLog, secrets, onBlocked, maxSteps }
- * @returns {Promise<Record<string,string>>} scraped data keyed by node id
- */
-async function executeGraph(agent, workflow, opts = {}) {
+export async function executeGraph(agent, workflow, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const secrets = opts.secrets || {};
-  const onBlocked = opts.onBlocked; // async (blockInfo) => void
+  const onBlocked = opts.onBlocked;
   const maxSteps = opts.maxSteps || MAX_STEPS_DEFAULT;
 
   const nodesById = {};
@@ -147,7 +93,6 @@ async function executeGraph(agent, workflow, opts = {}) {
       onLog(`${label} ERROR: ${err.message}`);
     }
 
-    // Heuristic block / CAPTCHA check between steps.
     if (onBlocked && typeof agent.isPageBlocked === 'function') {
       try {
         const block = await agent.isPageBlocked();
@@ -159,8 +104,8 @@ async function executeGraph(agent, workflow, opts = {}) {
     const next = await pickNextEdge(outgoing, ctx);
 
     if (!next) {
-      if (ctx.lastError) throw ctx.lastError; // unhandled failure with no fallback edge
-      break;                                  // clean end of a path
+      if (ctx.lastError) throw ctx.lastError;
+      break;
     }
     current = nodesById[next.target];
     if (!current) {
@@ -172,7 +117,6 @@ async function executeGraph(agent, workflow, opts = {}) {
   return scraped;
 }
 
-/** Executes a single graph node. Sets ctx.lastScrape / ctx.lastConditionResult as side effects. */
 async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label }) {
   const data = node.data || {};
 
@@ -228,7 +172,6 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label }
       break;
     }
 
-    // Condition / decision node: evaluates and exposes true/false for outgoing edges.
     case 'condition':
     case 'if': {
       ctx.lastConditionResult = await evaluateCondition(data.condition, ctx);
@@ -256,12 +199,3 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label }
       onLog(`${label} Unknown node type "${node.type}" — skipped.`);
   }
 }
-
-module.exports = {
-  evaluateCondition,
-  isFailureCondition,
-  pickNextEdge,
-  buildLabelMap,
-  executeGraph,
-  MAX_STEPS_DEFAULT,
-};
