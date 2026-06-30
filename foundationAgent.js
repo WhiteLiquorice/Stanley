@@ -1,42 +1,6 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.StanleyFoundation = void 0;
-const playwright_1 = require("playwright");
-const fs = __importStar(require("fs"));
-const path = __importStar(require("path"));
+import { chromium } from 'playwright';
+import * as fs from 'fs';
+import * as path from 'path';
 /**
  * Project Stanley Generic Framework Core (StanleyFoundation)
  *
@@ -44,7 +8,7 @@ const path = __importStar(require("path"));
  * and implements a client-side 'Record-and-Generalize' listener to capture
  * user click, change, and submit paths into serialized macro timelines.
  */
-class StanleyFoundation {
+export class StanleyFoundation {
     config;
     browser = null;
     context = null;
@@ -71,7 +35,7 @@ class StanleyFoundation {
      */
     async initialize() {
         console.log("[StanleyFoundation] Launching headful Chromium browser...");
-        this.browser = await playwright_1.chromium.launch({
+        this.browser = await chromium.launch({
             channel: 'chrome', // Use the user's installed Chrome — no browser download
             headless: this.config.headless,
             args: [
@@ -651,7 +615,7 @@ class StanleyFoundation {
                     switch (currentNode.type) {
                         case 'trigger':
                             if (currentNode.data.url) {
-                                await this.navigate(currentNode.data.url);
+                                await this.openTab(currentNode.data.url);
                             }
                             break;
                         case 'type':
@@ -738,4 +702,4 @@ class StanleyFoundation {
         this.activePageIndex = 0;
     }
 }
-exports.StanleyFoundation = StanleyFoundation;
+//# sourceMappingURL=foundationAgent.js.map

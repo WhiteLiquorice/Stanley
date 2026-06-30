@@ -6,6 +6,7 @@ const path = require('path');
 // visual Editor builds against (conditional edges, if/goto/label, ai_prompt, js_code,
 // stable multi-tab ids). The original linear ./runner.js only followed the first edge.
 const { runWorkflow } = require('./runner.js');
+const recorder = require('./stanley-daemon/recorder.js');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -268,7 +269,6 @@ app.post('/api/run/:id', async (req, res) => {
 });
 
 // REST Endpoints - Workflow Recorder ("record once, replay")
-const recorder = require('./stanley-daemon/recorder.js');
 
 app.post('/api/record/start', async (req, res) => {
   try {
@@ -457,6 +457,107 @@ Rules:
     res.json(JSON.parse(resultText));
   } catch (err) {
     res.status(500).json({ error: `Failed to call AI Chat: ${err.message}` });
+  }
+});
+
+app.post('/api/ai/compile', async (req, res) => {
+  const { prompt } = req.body;
+  
+  let apiKey = process.env.GEMINI_API_KEY;
+  let lmStudioKey = null;
+  const secrets = readData(VAULT_FILE);
+  
+  const googleSecret = secrets.find(s => s.name === 'Google API Key' || s.id === '2');
+  if (googleSecret && googleSecret.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
+    apiKey = googleSecret.value;
+  }
+  
+  const lmSecret = secrets.find(s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio'));
+  if (lmSecret && lmSecret.value) {
+    lmStudioKey = lmSecret.value;
+  }
+  
+  if (!apiKey && !lmStudioKey) {
+    return res.status(400).json({ 
+      error: 'Google Gemini API Key or LM Studio Key is missing. Please add a valid API key in your Credential Vault first.' 
+    });
+  }
+
+  try {
+    const compileSystemInstruction = `You are the brain of Project Stanley, a local browser automation butler.
+Your task is to take a natural language request from a user and translate it into a structured, step-by-step sequence of automation actions in JSON format.
+
+Available actions you can output:
+1. navigate: Goto a URL in the current tab. Keys: "action": "navigate", "url": "URL string"
+2. click: Click on a specific element. Keys: "action": "click", "description": "Short plain English description of what element to click"
+3. type: Type text into an input field. Keys: "action": "type", "description": "Short description of the input field to type into", "value": "Text value to type"
+4. wait: Wait for a specific duration in milliseconds. Keys: "action": "wait", "ms": number of milliseconds
+5. scrape: Scrape structured visible text content from the current tab. Keys: "action": "scrape", "selector": "Optional CSS selector to scope scrape to"
+6. open_tab: Open a new browser tab and optionally navigate to a URL. Keys: "action": "open_tab", "url": "Optional URL string". Returns a new tab index (0-based) you can use with switch_tab.
+7. switch_tab: Switch the active browser tab to a different tab by index. Keys: "action": "switch_tab", "index": number (0-indexed, where 0 is the first tab opened)
+8. close_tab: Close a browser tab by index. Keys: "action": "close_tab", "index": number (0-indexed)
+
+Multi-tab guidance:
+- Tabs are indexed starting at 0. The initial tab opened is always index 0.
+- Use open_tab to open a new tab (optionally with a URL), then switch_tab to go back to a previous tab.
+- When scraping multiple URLs, open each in a new tab, switch to it, scrape, then switch to the next.
+
+Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fences or backticks. Start with [ and end with ].`;
+
+    let resultText = '[]';
+    if (lmStudioKey) {
+      const lmUrl = 'http://localhost:1234/v1/chat/completions';
+      const lmResponse = await fetch(lmUrl, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
+        },
+        body: JSON.stringify({
+          model: 'local-model',
+          messages: [
+            { role: 'system', content: compileSystemInstruction },
+            { role: 'user', content: `Translate this user prompt into a structured workflow:\n"${prompt}"` }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      if (!lmResponse.ok) {
+        const errText = await lmResponse.text();
+        return res.status(500).json({ error: `LM Studio compile error: ${errText}` });
+      }
+
+      const data = await lmResponse.json();
+      resultText = data.choices?.[0]?.message?.content || '[]';
+    } else {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: `Translate this user prompt into a structured workflow:\n"${prompt}"` }] }],
+          systemInstruction: { parts: [{ text: compileSystemInstruction }] },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return res.status(500).json({ error: `Gemini API compile error: ${errText}` });
+      }
+
+      const data = await response.json();
+      resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+    }
+
+    const cleanJson = resultText.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    res.json(JSON.parse(cleanJson));
+  } catch (err) {
+    res.status(500).json({ error: `Failed to compile flow: ${err.message}` });
   }
 });
 

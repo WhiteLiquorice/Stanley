@@ -97,6 +97,16 @@
   gap: var(--spacing-sm);
 }
 
+/* Compact variant for the cramped Workflows Directory column */
+.compact-table th {
+  font-size: 0.68rem;
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+.compact-table td {
+  font-size: 0.78rem;
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+
 /* Vault Grid */
 .vault-grid {
   display: grid;
@@ -285,6 +295,38 @@
 .mock-node.type { border-top: 3px solid #8B5CF6; }
 .mock-node.wait { border-top: 3px solid #6B7280; }
 .mock-node.scrape { border-top: 3px solid #EC4899; }
+
+/* Inline workflow rename in the editor header */
+.workflow-name-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text-primary);
+  outline: none;
+}
+.workflow-name-input:hover {
+  border-color: var(--border-subtle);
+}
+.workflow-name-input:focus {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Super node — overall mission/goal (gold, banner-like) */
+.mock-node.mission {
+  border: 1px solid rgba(234, 179, 8, 0.55);
+  border-top: 3px solid #EAB308;
+  background: linear-gradient(180deg, rgba(234, 179, 8, 0.08), var(--bg-surface));
+}
+
+/* Sub node — parameters (green, compact, dashed to read as an attachment) */
+.mock-node.parameter {
+  width: 190px;
+  border: 1px dashed rgba(16, 185, 129, 0.6);
+  border-top: 3px solid #10B981;
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.07), var(--bg-surface));
+}
 
 .node-header {
   padding: var(--spacing-sm);
@@ -569,6 +611,12 @@
 .mock-node.if, .mock-node.condition { border-top: 3px solid #F97316; }
 .mock-node.goto { border-top: 3px solid #EAB308; }
 .mock-node.label { border-top: 3px solid #F43F5E; }
+.mock-node.record { border-top: 3px solid #ef4444; }
+.mock-node.extract { border-top: 3px solid #10B981; }
+.mock-node.extract_list { border-top: 3px solid #059669; }
+.mock-node.paginate { border-top: 3px solid #3B82F6; }
+.mock-node.agent { border-top: 3px solid #8B5CF6; }
+.mock-node.integration { border-top: 3px solid #f59e0b; }
 
 /* AI Chatbot Sidebar */
 .chatbot-sidebar {

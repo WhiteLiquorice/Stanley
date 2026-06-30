@@ -16,6 +16,27 @@ export interface AgentConfig {
     };
     statePath?: string;
 }
+export interface WorkflowNode {
+    id: string;
+    type: 'trigger' | 'type' | 'click' | 'wait' | 'scrape';
+    label: string;
+    data: {
+        url?: string;
+        selector?: string;
+        value?: string;
+        ms?: string;
+    };
+}
+export interface WorkflowEdge {
+    source: string;
+    target: string;
+}
+export interface Workflow {
+    id: string;
+    name: string;
+    nodes: WorkflowNode[];
+    edges: WorkflowEdge[];
+}
 /**
  * Project Stanley Generic Framework Core (StanleyFoundation)
  *
@@ -32,6 +53,7 @@ export declare class StanleyFoundation {
     protected activePageIndex: number;
     protected interactionTimeline: InteractionEvent[];
     protected sessionKey: string;
+    onWorkflowError?: (node: WorkflowNode, error: Error) => Promise<'retry' | 'skip' | 'abort'>;
     constructor(config?: AgentConfig);
     /**
      * Initializes the Playwright browser session.
@@ -139,6 +161,11 @@ export declare class StanleyFoundation {
      * Returns current timeline.
      */
     getTimeline(): InteractionEvent[];
+    /**
+     * Consumes a structured declarative workflow schema, handles the edge-to-edge
+     * linear routing mechanics, and runs the corresponding Playwright browser actions.
+     */
+    runWorkflow(workflow: Workflow): Promise<Record<string, string>>;
     /**
      * Closes browser sessions cleanly.
      */

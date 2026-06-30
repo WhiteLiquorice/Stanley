@@ -696,7 +696,7 @@ export class StanleyFoundation {
           switch (currentNode.type) {
             case 'trigger':
               if (currentNode.data.url) {
-                await this.navigate(currentNode.data.url);
+                await this.openTab(currentNode.data.url);
               }
               break;
 

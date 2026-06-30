@@ -1338,7 +1338,7 @@ exports.askStanleyAI = onCall({ cors: true, secrets: [geminiApiKey], maxInstance
     throw new HttpsError('permission-denied', 'No active Project Stanley license found for this user.')
   }
 
-  const { mode, prompt, elements, stepDescription, screenshotBase64 } = request.data
+  const { mode, prompt, elements, stepDescription, screenshotBase64, missionContext } = request.data
   const apiKey = geminiApiKey.value() || process.env.GEMINI_API_KEY
   if (!apiKey) {
     throw new HttpsError('failed-precondition', 'Gemini API key is not configured on the server.')
@@ -1464,7 +1464,7 @@ Output:
       throw new HttpsError('invalid-argument', 'Missing stepDescription or screenshotBase64 for resolveWithVision mode')
     }
 
-    const systemInstruction = `You are helping a browser automation tool. Look at this screenshot of a webpage and identify the best Playwright locator to find the element described.
+    const baseInstruction = `You are helping a browser automation tool. Look at this screenshot of a webpage and identify the best Playwright locator to find the element described.
 You must return JSON only, with the format:
 {
   "strategy": "role" | "text" | "placeholder" | "label",
@@ -1472,6 +1472,11 @@ You must return JSON only, with the format:
   "roleType": "button" | "link" | "checkbox" | "textbox" | "searchbox" | "spinbutton" (optional, required if strategy is role)
 }
 Return nothing but the valid JSON string. Do not wrap in markdown fences.`;
+    // Mission goal + step parameters (when provided) give the model the overall
+    // intent, which improves disambiguation on cluttered pages.
+    const systemInstruction = missionContext
+      ? `${missionContext}\n\n${baseInstruction}`
+      : baseInstruction;
 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
@@ -1509,10 +1514,222 @@ Return nothing but the valid JSON string. Do not wrap in markdown fences.`;
     } catch (e) {
       throw new HttpsError('internal', `Failed to resolve selector using Gemini Vision: ${e.message}`);
     }
+  } else if (mode === 'chat') {
+    const { message, workflow, history } = request.data
+    if (!message) throw new HttpsError('invalid-argument', 'Missing message for chat mode')
+
+    const systemInstruction = `You are "Stanley", the AI Copilot for Project Stanley, an enterprise browser automation suite.
+Your goal is to help the user build, edit, and understand their low-code browser automation workflows.
+You must respond in strict JSON matching this schema:
+{
+  "message": "A conversational explanation of what you did or how you answered.",
+  "actions": []
+}
+
+The current workflow is provided in the prompt as a JSON object with:
+- name: string
+- nodes: Array of { id, type, label, data: { ... }, position: { x, y } }
+- edges: Array of { source, target, condition: ... }
+
+Supported Node Types:
+- 'trigger': Start step, takes "url" in data.
+- 'navigate': Go to a URL, takes "url" in data.
+- 'click': Click an element, takes "description" and optionally "selector" in data.
+- 'type': Type text into an input, takes "description", "value" (can be "vault:SecretName"), and optionally "selector" in data.
+- 'wait': Wait for milliseconds, takes "ms" (string) in data.
+- 'scrape': Extract text from a selector, takes "selector" in data.
+- 'open_tab': Open a new tab, takes "url" and "label" in data.
+- 'switch_tab': Switch active tab, takes "tab" or "index" in data.
+- 'close_tab': Close tab, takes "tab" or "index" in data.
+- 'if': Decision node for branching, takes "condition" object in data.
+- 'goto': Jump to a labeled step, takes "label" in data.
+- 'label': Step label target for goto, takes "label" in data.
+- 'ai_prompt': Run AI analysis, takes "prompt" and "system" (optional) in data.
+- 'js_code': Execute custom javascript, takes "code" in data.
+- 'mission': SUPER NODE — the overall goal for the whole run. Takes "prompt" in data. NOT part of the execution flow; connect it to any node with a CONTEXT edge ("kind": "context"). The runner feeds it to the AI on every step. At most one.
+- 'parameter': SUB NODE — supplies parameters to the single step it is wired to. Arbitrary keys in data; "value" sets what gets typed/used (supports "vault:SecretName"), other keys (e.g. "account": "Business") add AI context. Connect with a CONTEXT edge ("kind": "context"). Use it to pick a specific account/login so the AI never guesses.
+
+Supported Actions in your response:
+1. {"type": "add_node", "node": { "id": "unique_string", "type": "node_type", "label": "Label", "data": { ... }, "position": { "x": number, "y": number } }}
+2. {"type": "delete_node", "nodeId": "node_id_to_delete"}
+3. {"type": "update_node", "nodeId": "node_id_to_update", "nodeUpdates": { "label": "New Label", "data": { ... } }}
+4. {"type": "add_edge", "edge": { "source": "source_id", "target": "target_id", "condition": ..., "kind": "context" (OPTIONAL — only when connecting a mission or parameter node) }}
+5. {"type": "delete_edge", "source": "source_id", "target": "target_id"}
+6. {"type": "set_workflow", "workflow": { "name": "New Name", "nodes": [...], "edges": [...] }}
+
+Rules:
+- Keep the graph clean. When adding nodes, space them 140px down the y-axis.
+- Connect nodes using "add_edge" so the workflow has a logical flow.
+- If the user asks a general question, explain in "message" and leave "actions" empty.
+- Always output valid, parseable JSON with no markdown formatting.`
+
+    const userMessage = `Current workflow:\n${JSON.stringify(workflow || {}, null, 2)}\n\nConversation history:\n${JSON.stringify(history || [])}\n\nUser message: ${message}`
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.4 }
+        })
+      })
+
+      if (!response.ok) {
+        const errText = await response.text()
+        throw new Error(`Gemini API Error: ${errText}`)
+      }
+
+      const resData = await response.json()
+      const text = resData.candidates[0].content.parts[0].text.trim()
+      return JSON.parse(text)
+    } catch (e) {
+      throw new HttpsError('internal', `Failed to process chat message: ${e.message}`)
+    }
+  } else if (mode === 'agentStep') {
+    const { goal, history, screenshotBase64 } = request.data
+    if (!goal || !screenshotBase64) {
+      throw new HttpsError('invalid-argument', 'Missing goal or screenshotBase64 for agentStep mode')
+    }
+
+    const systemInstruction = `You are the brain of a web automation agent. Look at the screenshot of the current webpage, review the goal, and examine the actions taken so far.
+Determine the next best action to take to achieve the goal.
+Available actions you can output (JSON only):
+1. click: Click an element. Keys: "action": "click", "description": "Element description"
+2. type: Type text into a field. Keys: "action": "type", "description": "Field description", "value": "Value to type"
+3. navigate: Go to a URL. Keys: "action": "navigate", "url": "URL string"
+4. wait: Wait for page loading/settling. Keys: "action": "wait", "ms": number of milliseconds
+5. scrape: Extract text. Keys: "action": "scrape", "selector": "Optional CSS selector"
+6. finish: Goal achieved or cannot proceed. Keys: "action": "finish", "reason": "Explanation of completion status"
+
+Output MUST be a JSON object with:
+{
+  "action": "click" | "type" | "navigate" | "wait" | "scrape" | "finish",
+  "description": "Short explanation of the target element (for click/type)",
+  "value": "What to type (for type)",
+  "url": "Target URL (for navigate)",
+  "ms": number (for wait),
+  "reason": "Explain your thinking for choosing this step"
+}
+Return nothing but the valid JSON string. Do not wrap in markdown fences.`;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: `Goal: "${goal}"\n\nHistory of actions taken so far:\n${JSON.stringify(history || [])}` },
+              {
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: screenshotBase64
+                }
+              }
+            ]
+          }],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini API AgentStep Error: ${errText}`);
+      }
+
+      const resData = await response.json();
+      const text = resData.candidates[0].content.parts[0].text.trim();
+      return JSON.parse(text);
+    } catch (e) {
+      throw new HttpsError('internal', `Failed to process agent step: ${e.message}`);
+    }
+  } else if (mode === 'extract') {
+    const { html, schema } = request.data
+    if (!html || !schema) {
+      throw new HttpsError('invalid-argument', 'Missing html or schema for extract mode')
+    }
+
+    const systemInstruction = `You are a structured data extractor. Your task is to extract information from the provided HTML/text content according to the requested JSON schema.
+You must output a JSON object or array of objects matching the schema exactly.
+Do not write explanations, and do not wrap in markdown code blocks. Output raw JSON only.
+
+Target Schema:
+${typeof schema === 'object' ? JSON.stringify(schema, null, 2) : String(schema)}`;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [{ text: `Content to extract from:\n${html.slice(0, 150000)}` }] // Truncate content to avoid model overflow
+          }],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini API Extract Error: ${errText}`);
+      }
+
+      const resData = await response.json();
+      const text = resData.candidates[0].content.parts[0].text.trim();
+      return { result: JSON.parse(text) };
+    } catch (e) {
+      throw new HttpsError('internal', `Failed to extract data: ${e.message}`);
+    }
+  } else if (mode === 'integration') {
+    const { integrationName, params, secrets: resolvedSecrets } = request.data
+    if (!integrationName) {
+      throw new HttpsError('invalid-argument', 'Missing integrationName for integration mode')
+    }
+
+    try {
+      // Mock Integration handlers that simulate API endpoints using configured vault secrets
+      if (integrationName === 'gmail_list_messages') {
+        const query = params?.query || '';
+        return {
+          success: true,
+          data: [
+            { id: "m1", subject: `Billing details matching: ${query || 'general'}`, sender: "billing@projectstanley.com", body: "Your license is active and billed to your Blaze account." },
+            { id: "m2", subject: "Weekly AI News", sender: "news@dailyai.com", body: "Check out the new neuro-symbolic models." }
+          ]
+        };
+      } else if (integrationName === 'shopify_list_orders') {
+        return {
+          success: true,
+          data: [
+            { id: "o1", total: 149.99, customer: "John Doe", items: ["Stanley Enterprise Pro License"] },
+            { id: "o2", total: 29.99, customer: "Jane Smith", items: ["Stanley Starter Pack"] }
+          ]
+        };
+      } else {
+        throw new Error(`Unknown integration: ${integrationName}`);
+      }
+    } catch (e) {
+      throw new HttpsError('internal', `Failed to execute integration: ${e.message}`);
+    }
   } else {
-    throw new HttpsError('invalid-argument', 'Invalid mode, must be "compile", "resolve", or "resolveWithVision".')
+    throw new HttpsError('invalid-argument', 'Invalid mode, must be "compile", "resolve", "resolveWithVision", "chat", "agentStep", "extract", or "integration".')
   }
 })
 
+// ── Stanley automated-run triggers (scheduler + webhook) ─────────────────────
+const stanleyTriggers = require('./stanleyTriggers.js')
+exports.stanleyScheduleTick = stanleyTriggers.stanleyScheduleTick
+exports.stanleyWebhook = stanleyTriggers.stanleyWebhook
 
 

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, KeyRound, Network, Settings, Search, Bell, LogOut, CreditCard } from 'lucide-react';
+import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database } from 'lucide-react';
 import './Layout.css'; // We'll create a small css file for layout specifics
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -13,8 +13,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { name: 'Cockpit', path: '/dashboard', icon: Activity },
-    { name: 'Low-Code Editor', path: '/dashboard/editor', icon: Network },
+    { name: 'Results', path: '/dashboard/results', icon: Database },
     { name: 'Credential Vault', path: '/dashboard/vault', icon: KeyRound },
+    { name: 'Guide', path: '/dashboard/guide', icon: BookOpen },
     { name: 'Settings', path: '/dashboard/settings', icon: Settings },
   ];
 

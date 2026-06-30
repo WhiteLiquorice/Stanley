@@ -29,9 +29,17 @@ import {
   ArrowRight, 
   Bookmark,
   Sparkles,
-  Code
+  Code,
+  Circle,
+  Square,
+  Target,
+  Tag
 } from 'lucide-react';
 import './Views.css';
+import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
+import { chatCopilot, compilePrompt } from '../lib/stanleyCloud';
+import { runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
+import { TriggersPanel } from '../components/TriggersPanel';
 
 // Interface definitions matching the backend data structure
 interface NodeData {
@@ -50,6 +58,13 @@ interface NodeData {
   prompt?: string;
   system?: string;
   code?: string;
+  schema?: string;
+  maxPages?: string;
+  actionNodeId?: string;
+  goal?: string;
+  maxSteps?: string;
+  integrationName?: string;
+  query?: string;
 }
 
 interface WorkflowNode {
@@ -64,6 +79,9 @@ interface WorkflowEdge {
   source: string;
   target: string;
   condition?: any;
+  kind?: string; // 'context' for parameter/mission attachments (excluded from flow)
+  sourceHandle?: string | null; // which of the 4 handles the edge attaches to
+  targetHandle?: string | null;
 }
 
 interface Workflow {
@@ -82,6 +100,7 @@ interface Run {
   duration: string;
   timestamp: string;
   logs?: string[];
+  scraped?: Record<string, any>;
 }
 
 // React Flow generic data interfaces for typing node.data and edge.data
@@ -95,6 +114,7 @@ interface CustomNodeData extends Record<string, unknown> {
 
 interface CustomEdgeData extends Record<string, unknown> {
   condition?: any;
+  kind?: string; // 'context' for parameter/mission attachments (not flow)
 }
 
 type MyRFNode = RFNode<CustomNodeData>;
@@ -120,20 +140,29 @@ function WorkflowNodeComponent({ data, selected }: any) {
       case 'label': return <Bookmark size={14}/>;
       case 'ai_prompt': return <Sparkles size={14}/>;
       case 'js_code': return <Code size={14}/>;
+      case 'record': return <Circle size={14} style={{ color: '#ef4444' }} fill="#ef4444" className="spinner-glow" />;
+      case 'mission': return <Target size={14}/>;
+      case 'parameter': return <Tag size={14}/>;
+      case 'extract': return <Database size={14} style={{ color: '#10b981' }}/>;
+      case 'extract_list': return <Database size={14} style={{ color: '#059669' }}/>;
+      case 'paginate': return <RefreshCw size={14} style={{ color: '#3b82f6' }}/>;
+      case 'agent': return <Sparkles size={14} style={{ color: '#a855f7' }}/>;
+      case 'integration': return <Globe size={14} style={{ color: '#f59e0b' }}/>;
       default: return <Plus size={14}/>;
     }
   };
 
   return (
     <div className={`mock-node ${type} ${selected ? 'selected-node' : ''}`}>
-      {type !== 'trigger' && (
-        <Handle 
-          type="target" 
-          position={Position.Top} 
-          style={{ background: 'var(--border-strong)', width: 8, height: 8 }} 
-        />
-      )}
-      
+      {/* Four connection points. Top/bottom = flow (declared first so edges with
+          no saved handle default to vertical flow). Left/right = extra points,
+          handy for hanging Parameter/Mission nodes off the side. Any handle
+          accepts multiple edges, so several nodes can converge on one. */}
+      <Handle type="target" id="top" position={Position.Top} style={{ background: 'var(--border-strong)', width: 9, height: 9 }} />
+      <Handle type="source" id="bottom" position={Position.Bottom} style={{ background: 'var(--border-strong)', width: 9, height: 9 }} />
+      <Handle type="target" id="left" position={Position.Left} style={{ background: '#a855f7', width: 9, height: 9 }} />
+      <Handle type="source" id="right" position={Position.Right} style={{ background: '#a855f7', width: 9, height: 9 }} />
+
       <div className="node-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           {getIcon(type)} 
@@ -163,13 +192,18 @@ function WorkflowNodeComponent({ data, selected }: any) {
         {type === 'label' && `Label: ${nodeData?.label || 'None'}`}
         {type === 'ai_prompt' && `Prompt: ${nodeData?.prompt ? (nodeData.prompt.substring(0, 30) + '...') : 'None'}`}
         {type === 'js_code' && `Script: ${nodeData?.code ? (nodeData.code.substring(0, 30) + '...') : 'None'}`}
+        {type === 'record' && `Record URL: ${nodeData?.url || 'None'}`}
+        {type === 'mission' && `🎯 ${nodeData?.prompt ? (nodeData.prompt.substring(0, 40) + (nodeData.prompt.length > 40 ? '…' : '')) : 'Set the overall goal…'}`}
+        {type === 'parameter' && (() => {
+          const keys = Object.keys(nodeData || {});
+          return keys.length ? keys.map(k => `${k}: ${String(nodeData[k]).startsWith('vault:') ? '🔒' : nodeData[k]}`).join(', ') : 'Add fields…';
+        })()}
+        {type === 'extract' && `Extract Schema: ${nodeData?.schema ? nodeData.schema.substring(0, 25) + '...' : 'None'}`}
+        {type === 'extract_list' && `List Schema: ${nodeData?.schema ? nodeData.schema.substring(0, 25) + '...' : 'None'}`}
+        {type === 'paginate' && `Next: ${nodeData?.selector || nodeData?.description || '?'}, Max: ${nodeData?.maxPages || 3}`}
+        {type === 'agent' && `Goal: ${nodeData?.goal || 'None'} [${nodeData?.maxSteps || 8} steps]`}
+        {type === 'integration' && `API: ${nodeData?.integrationName || 'None'}`}
       </div>
-
-      <Handle 
-        type="source" 
-        position={Position.Bottom} 
-        style={{ background: 'var(--border-strong)', width: 8, height: 8 }} 
-      />
     </div>
   );
 }
@@ -294,16 +328,12 @@ export function CockpitInner() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   // Modal states
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newWorkflowName, setNewWorkflowName] = useState('');
-  const [newWorkflowUrl, setNewWorkflowUrl] = useState('https://www.google.com');
 
   // Custom run modal state
   const [runWorkflowId, setRunWorkflowId] = useState<string | null>(null);
   const [customStartUrl, setCustomStartUrl] = useState('');
 
   // Logs modal state
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [pollingLogs, setPollingLogs] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
@@ -319,14 +349,21 @@ export function CockpitInner() {
     actionsApplied?: string[];
   }
   const [showChat, setShowChat] = useState(true);
+  const [showTriggers, setShowTriggers] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: '1', role: 'stanley', content: 'Hi! I\'m Stanley, your automation copilot. Tell me what you want to automate, or ask me to add/edit steps in your flow!' }
   ]);
   const [chatLoading, setChatLoading] = useState(false);
-  const [generatePrompt, setGeneratePrompt] = useState('');
   const [generatingFlow, setGeneratingFlow] = useState(false);
   const [usingLmStudio, setUsingLmStudio] = useState(false);
+  // Copilot mode: 'edit' tweaks the selected flow via chat; 'build' generates a brand-new flow from a description.
+  const [chatMode, setChatMode] = useState<'edit' | 'build'>('edit');
+
+  // Recorder state
+  const [recording, setRecording] = useState(false);
+  const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [recordingNodeId, setRecordingNodeId] = useState<string | null>(null);
 
   const [extensionActive, setExtensionActive] = useState(false);
   const [nativeRunning, setNativeRunning] = useState(false);
@@ -336,6 +373,8 @@ export function CockpitInner() {
   const nativeRunIdRef = useRef<string>('');
   const selectedWorkflowRef = useRef(selectedWorkflow);
 
+  // Only the optional desktop recorder daemon still uses this. All workflow/run
+  // CRUD and headless execution go through Firestore + the Cloud Run runner.
   const API_URL = 'http://localhost:3001/api';
 
   useEffect(() => {
@@ -352,7 +391,7 @@ export function CockpitInner() {
       if (e.data.cmd === 'ping_response') {
         setExtensionActive(true);
       } else if (e.data.cmd === 'workflow_event') {
-        const { action, log, error } = e.data;
+        const { action, log, error, result } = e.data;
         if (action === 'native_log') {
           setActiveRun(prev => {
             if (!prev) return null;
@@ -376,14 +415,11 @@ export function CockpitInner() {
               trigger: 'Browser Extension',
               duration: runDuration,
               timestamp: new Date().toLocaleString(),
-              logs: updatedLogs
+              logs: updatedLogs,
+              scraped: result || {}
             };
             
-            fetch(`${API_URL}/runs`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(finalRun)
-            })
+            setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
               .then(() => fetchWorkflowsAndRuns())
               .catch(err => console.error('Failed to save native run:', err));
 
@@ -408,11 +444,7 @@ export function CockpitInner() {
               logs: updatedLogs
             };
 
-            fetch(`${API_URL}/runs`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(finalRun)
-            })
+            setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
               .then(() => fetchWorkflowsAndRuns())
               .catch(err => console.error('Failed to save native run:', err));
 
@@ -439,27 +471,18 @@ export function CockpitInner() {
   const fetchWorkflowsAndRuns = async () => {
     try {
       setLoading(true);
-      const [wfRes, runsRes] = await Promise.all([
-        fetch(`${API_URL}/workflows`),
-        fetch(`${API_URL}/runs`)
+      const [wfs, runData, vaultItems] = await Promise.all([
+        listDocs('workflows'),
+        listDocs('runs').catch(() => []),
+        listDocs('vault').catch(() => []),
       ]);
-      const wfs = await wfRes.json();
-      const runData = await runsRes.json();
-      setWorkflows(wfs);
-      setRuns(runData);
-      
-      try {
-        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(2000) });
-        if (vaultRes.ok) {
-          const secrets: any[] = await vaultRes.json();
-          const lmSecret = secrets.find(
-            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
-          );
-          setUsingLmStudio(!!lmSecret?.value);
-        }
-      } catch {
-        // Ignore offline vault errors
-      }
+      setWorkflows(wfs as unknown as Workflow[]);
+      setRuns(runData as unknown as any[]);
+      const lmSecret = vaultItems.find(
+        (s: any) => typeof s.name === 'string' &&
+          s.name.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
+      );
+      setUsingLmStudio(!!lmSecret);
     } catch (err) {
       console.error('Error fetching data:', err);
     } finally {
@@ -506,13 +529,18 @@ export function CockpitInner() {
         else if (type === 'exists') label = `Exists "${val}"`;
         else if (type === 'notExists') label = `Not Exists "${val}"`;
       }
+      const isContext = (edge as any).kind === 'context';
       return {
         id: `e-${edge.source}-${edge.target}-${index}`,
         source: edge.source,
         target: edge.target,
+        sourceHandle: (edge as any).sourceHandle ?? undefined,
+        targetHandle: (edge as any).targetHandle ?? undefined,
         type: 'smoothstep',
-        label,
-        data: { condition: cond }
+        label: isContext ? 'context' : label,
+        animated: isContext,
+        style: isContext ? { stroke: '#a855f7', strokeDasharray: '5 5' } : undefined,
+        data: { condition: cond, kind: isContext ? 'context' : undefined }
       };
     });
 
@@ -527,6 +555,93 @@ export function CockpitInner() {
     setSelectedNodeId((prev) => (prev === id ? null : prev));
   }, [setNodes, setEdges]);
 
+  const handleCrystallizeAgent = (nodeId: string, history: any[]) => {
+    if (!history || !Array.isArray(history) || history.length === 0) return;
+    
+    const agentNode = nodes.find(n => n.id === nodeId);
+    if (!agentNode) return;
+    
+    const newNodes: MyRFNode[] = [];
+    const newEdges: MyRFEdge[] = [];
+    
+    let currentX = agentNode.position.x;
+    let currentY = agentNode.position.y;
+    
+    history.forEach((step, idx) => {
+      const stepId = `c_${nodeId}_${idx}_${Math.random().toString(36).substring(2, 5)}`;
+      let stepType = step.action;
+      if (stepType === 'finish') return;
+      
+      const labelMap: Record<string, string> = {
+        click: 'Crystallized Click',
+        type: 'Crystallized Type',
+        navigate: 'Crystallized Navigate',
+        wait: 'Crystallized Wait',
+        scrape: 'Crystallized Scrape'
+      };
+      
+      const nodeData: Record<string, any> = {};
+      if (stepType === 'click') {
+        nodeData.description = step.description || '';
+      } else if (stepType === 'type') {
+        nodeData.description = step.description || '';
+        nodeData.value = step.value || '';
+      } else if (stepType === 'navigate') {
+        nodeData.url = step.url || '';
+      } else if (stepType === 'wait') {
+        nodeData.ms = String(step.ms || '2000');
+      } else if (stepType === 'scrape') {
+        nodeData.selector = step.selector || '';
+      }
+      
+      newNodes.push({
+        id: stepId,
+        type: 'workflowNode',
+        position: { x: currentX, y: currentY + idx * 140 },
+        data: {
+          id: stepId,
+          type: stepType,
+          label: labelMap[stepType] || `Agent Step ${idx + 1}`,
+          data: nodeData,
+          onDelete: handleDeleteNode
+        }
+      });
+    });
+    
+    if (newNodes.length === 0) return;
+    
+    for (let i = 0; i < newNodes.length - 1; i++) {
+      newEdges.push({
+        id: `e_${newNodes[i].id}_${newNodes[i+1].id}`,
+        source: newNodes[i].id,
+        target: newNodes[i+1].id,
+        sourceHandle: 'bottom',
+        targetHandle: 'top',
+        type: 'smoothstep',
+        data: { condition: 'always' }
+      });
+    }
+    
+    const incomingEdges = edges.filter(e => e.target === nodeId);
+    const updatedIncoming = incomingEdges.map(e => ({
+      ...e,
+      target: newNodes[0].id
+    }));
+    
+    const outgoingEdges = edges.filter(e => e.source === nodeId);
+    const updatedOutgoing = outgoingEdges.map(e => ({
+      ...e,
+      source: newNodes[newNodes.length - 1].id
+    }));
+    
+    const filteredNodes = nodes.filter(n => n.id !== nodeId);
+    const filteredEdges = edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+    
+    setNodes([...filteredNodes, ...newNodes]);
+    setEdges([...filteredEdges, ...newEdges, ...updatedIncoming, ...updatedOutgoing]);
+    setSelectedNodeId(newNodes[0].id);
+  };
+
   // Inject deletion handler dynamically into node data references
   useEffect(() => {
     setNodes((nds) =>
@@ -540,71 +655,9 @@ export function CockpitInner() {
     );
   }, [handleDeleteNode, setNodes]);
 
-  // Poll active run
-  useEffect(() => {
-    let interval: number;
-    if (activeRunId) {
-      setPollingLogs(true);
-      const poll = async () => {
-        try {
-          const res = await fetch(`${API_URL}/runs/${activeRunId}`);
-          const data = await res.json();
-          setActiveRun(data);
-          if (data.status !== 'Running') {
-            setPollingLogs(false);
-            clearInterval(interval);
-            // Refresh list
-            const runsRes = await fetch(`${API_URL}/runs`);
-            setRuns(await runsRes.json());
-
-            // Auto-retry on failure (up to MAX_AUTO_RETRIES)
-            if (data.status === 'Failed') {
-              setRetryCount(prev => {
-                const next = prev + 1;
-                if (next < MAX_AUTO_RETRIES && data.workflowId) {
-                  // Brief pause then relaunch
-                  setTimeout(async () => {
-                    try {
-                      const reRunRes = await fetch(`${API_URL}/run/${data.workflowId}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({})
-                      });
-                      const reRunData = await reRunRes.json();
-                      if (reRunData.success) {
-                        setActiveRunId(reRunData.runId);
-                        setActiveRun(prev2 => prev2 ? {
-                          ...prev2,
-                          id: reRunData.runId,
-                          status: 'Running',
-                          logs: [...(prev2.logs || []), `[System] Auto-retry ${next}/${MAX_AUTO_RETRIES}...`]
-                        } : null);
-                      }
-                    } catch (_) {}
-                  }, 1500);
-                } else {
-                  // Max retries hit — store workflowId for manual Retry button
-                  setPendingRetryWorkflowId(data.workflowId);
-                }
-                return next;
-              });
-            } else {
-              // Success — reset counters
-              setRetryCount(0);
-              setPendingRetryWorkflowId(null);
-            }
-          }
-        } catch (err) {
-          console.error(err);
-          setPollingLogs(false);
-        }
-      };
-      
-      poll();
-      interval = window.setInterval(poll, 1500);
-    }
-    return () => clearInterval(interval);
-  }, [activeRunId]);
+  // Note: cloud headless runs are synchronous — runHeadless() returns the full
+  // logs when finished — so there's no run to poll. handleRunWorkflow drives the
+  // whole lifecycle (including auto-retry) inline. No polling effect needed.
 
   const applyChatActions = useCallback((actions: any[]) => {
     if (!selectedWorkflow) return [];
@@ -681,14 +734,10 @@ export function CockpitInner() {
 
     if (appliedLogs.length > 0) {
       loadWorkflowInEditor(wf);
-      // Automatically save to local server state so it persists
-      fetch(`${API_URL}/workflows`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(wf)
-      }).then(res => res.json())
-        .then(updatedWf => {
-          setWorkflows(prev => prev.map(w => w.id === updatedWf.id ? updatedWf : w));
+      // Automatically persist to Firestore so changes survive a refresh
+      setDoc('workflows', wf.id, wf as unknown as Record<string, unknown>)
+        .then(() => {
+          setWorkflows(prev => prev.map(w => w.id === wf.id ? wf : w));
         })
         .catch(err => console.error('Failed to auto-save chat changes:', err));
     }
@@ -711,154 +760,11 @@ export function CockpitInner() {
     setChatLoading(true);
 
     try {
-      // Step 1: Get the API keys from the local vault server.
-      let apiKey: string | null = null;
-      let lmStudioKey: string | null = null;
-      try {
-        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(3000) });
-        if (vaultRes.ok) {
-          const secrets: any[] = await vaultRes.json();
-          const googleSecret = secrets.find(
-            s => s.name === 'Google API Key' || s.name?.toLowerCase().includes('gemini')
-          );
-          if (googleSecret?.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
-            apiKey = googleSecret.value;
-          }
-          const lmSecret = secrets.find(
-            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
-          );
-          if (lmSecret?.value) {
-            lmStudioKey = lmSecret.value;
-          }
-        }
-      } catch {
-        // Server offline
-      }
-
-      if (!apiKey && !lmStudioKey) {
-        throw new Error(
-          'Stanley needs a Gemini API key or LM Studio key to chat. Make sure the backend server is running ' +
-          '(npm run dev:backend) and add a valid key in the Credential Vault.'
-        );
-      }
-
-      // Step 2: Build request directly.
-      const systemInstruction = `You are "Stanley", the AI Copilot for Project Stanley, an enterprise browser automation suite.
-Your goal is to help the user build, edit, and understand their low-code browser automation workflows.
-You must respond in strict JSON matching this schema:
-{
-  "message": "A conversational explanation of what you did or how you answered.",
-  "actions": []
-}
-
-The current workflow is provided in the prompt as a JSON object with:
-- name: string
-- nodes: Array of { id, type, label, data: { ... }, position: { x, y } }
-- edges: Array of { source, target, condition: ... }
-
-Supported Node Types:
-- 'trigger': Start step, takes "url" in data.
-- 'navigate': Go to a URL, takes "url" in data.
-- 'click': Click an element, takes "description" and optionally "selector" in data.
-- 'type': Type text into an input, takes "description", "value", and optionally "selector" in data.
-- 'wait': Wait for some milliseconds, takes "ms" (string) in data.
-- 'scrape': Extract text from a selector, takes "selector" in data.
-- 'open_tab': Open a new browser tab, takes "url" and "label" in data.
-- 'switch_tab': Switch active tab, takes "tab" or "index" in data.
-- 'close_tab': Close tab, takes "tab" or "index" in data.
-- 'if': Decision node, takes "condition" object in data: { type: "always"|"contains"|"notContains"|"exists"|"notExists", value: string }
-- 'goto': Jump to a labeled step, takes "label" in data.
-- 'label': Step label target, takes "label" in data.
-- 'ai_prompt': Run AI analysis, takes "prompt" and "system" (optional) in data.
-- 'js_code': Execute custom javascript, takes "code" in data.
-
-Supported Actions in your response:
-1. {"type": "add_node", "node": { "id": "unique_string", "type": "node_type", "label": "Label", "data": { ... }, "position": { "x": number, "y": number } }}
-2. {"type": "delete_node", "nodeId": "node_id_to_delete"}
-3. {"type": "update_node", "nodeId": "node_id_to_update", "nodeUpdates": { "label": "New Label", "data": { ... } }}
-4. {"type": "add_edge", "edge": { "source": "source_id", "target": "target_id", "condition": ... }}
-5. {"type": "delete_edge", "source": "source_id", "target": "target_id"}
-6. {"type": "set_workflow", "workflow": { "name": "New Name", "nodes": [...], "edges": [...] }}
-
-Rules:
-- Keep the graph clean. When adding nodes, space them 140px apart on the y-axis.
-- Connect new nodes using "add_edge".
-- If the user asks a general question, answer in "message" and leave "actions" empty.
-- Always output valid, parseable JSON. Do NOT wrap in markdown code fences.`;
-
-      const currentContext = `Current Workflow State: ${JSON.stringify(selectedWorkflow || null)}\n\nUser Request: ${text}`;
-      let resultText = '{}';
-
-      if (lmStudioKey) {
-        // Call LM Studio OpenAI-compatible completions
-        const lmUrl = 'http://localhost:1234/v1/chat/completions';
-        const messages = [
-          { role: 'system', content: systemInstruction }
-        ];
-        chatMessages.forEach(m => {
-          messages.push({
-            role: m.role === 'user' ? 'user' : 'assistant',
-            content: m.content
-          });
-        });
-        messages.push({ role: 'user', content: currentContext });
-
-        const lmRes = await fetch(lmUrl, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
-          },
-          body: JSON.stringify({
-            model: 'local-model',
-            messages,
-            temperature: 0.2
-          })
-        });
-
-        if (!lmRes.ok) {
-          const errText = await lmRes.text();
-          throw new Error(`LM Studio error: ${errText}`);
-        }
-
-        const lmData = await lmRes.json();
-        resultText = lmData.choices?.[0]?.message?.content || '{}';
-      } else {
-        // Call Gemini
-        const contents: any[] = [];
-        chatMessages.forEach(m => {
-          contents.push({
-            role: m.role === 'user' ? 'user' : 'model',
-            parts: [{ text: m.content }]
-          });
-        });
-        contents.push({ role: 'user', parts: [{ text: currentContext }] });
-
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-        const geminiRes = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents,
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            generationConfig: { responseMimeType: 'application/json' }
-          })
-        });
-
-        if (!geminiRes.ok) {
-          const errText = await geminiRes.text();
-          throw new Error(`Gemini API error: ${errText}`);
-        }
-
-        const geminiData = await geminiRes.json();
-        resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-      }
-      let parsed: any = {};
-      try {
-        parsed = JSON.parse(resultText);
-      } catch {
-        parsed = { message: resultText, actions: [] };
-      }
+      const parsed = await chatCopilot(
+        text,
+        selectedWorkflow || {},
+        chatMessages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+      );
 
       let applied: string[] = [];
       if (parsed.actions && Array.isArray(parsed.actions)) {
@@ -885,185 +791,107 @@ Rules:
     }
   };
 
-  const handleCreateWorkflow = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newWorkflowName.trim()) return;
-
+  // Create a fresh automation and drop straight into the React Flow editor — no
+  // URL-first modal. The start URL is set on the trigger node in the canvas (or
+  // the user can begin with an Open Tab node so the run doesn't take over a tab).
+  const handleNewAutomation = async () => {
     const newWf: Workflow = {
       id: Math.random().toString(36).substring(2, 9),
-      name: newWorkflowName,
+      name: `Untitled Automation ${workflows.length + 1}`,
       nodes: [
-        { id: '1', type: 'trigger', label: 'Start Trigger', data: { url: newWorkflowUrl }, position: { x: 100, y: 50 } }
+        { id: '1', type: 'trigger', label: 'Start Trigger', data: { url: 'https://' }, position: { x: 250, y: 60 } }
       ],
       edges: []
     };
 
     try {
-      const res = await fetch(`${API_URL}/workflows`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newWf)
-      });
-      if (res.ok) {
-        setWorkflows([...workflows, newWf]);
-        setShowCreateModal(false);
-        setNewWorkflowName('');
-        loadWorkflowInEditor(newWf);
-      }
+      await setDoc('workflows', newWf.id, newWf as unknown as Record<string, unknown>);
+      setWorkflows([...workflows, newWf]);
+      loadWorkflowInEditor(newWf);
     } catch (err) {
       console.error(err);
+      alert('Failed to create automation. Please try again.');
     }
   };
 
-  const handleGenerateFlow = async () => {
-    const prompt = generatePrompt.trim();
+  // Rename the open workflow inline from the editor header; persist on commit.
+  const updateWorkflowName = (name: string) => {
+    if (!selectedWorkflow) return;
+    setSelectedWorkflow({ ...selectedWorkflow, name });
+  };
+  const commitWorkflowName = async () => {
+    if (!selectedWorkflow) return;
+    const name = (selectedWorkflow.name || '').trim() || 'Untitled Automation';
+    const updated = { ...selectedWorkflow, name };
+    setSelectedWorkflow(updated);
+    setWorkflows(prev => prev.map(w => w.id === updated.id ? { ...w, name } : w));
+    try {
+      await setDoc('workflows', updated.id, updated as unknown as Record<string, unknown>);
+    } catch (err) {
+      console.error('Failed to rename workflow:', err);
+    }
+  };
+
+  // Build a brand-new workflow from a plain-English description (compile mode).
+  // Posts progress into the Copilot chat so it's the single AI surface.
+  const handleBuildFlow = async (textToSend?: string) => {
+    const prompt = (textToSend || chatInput).trim();
     if (!prompt) return;
 
+    if (!textToSend) setChatInput('');
+
+    const userMsg: ChatMessage = {
+      id: Math.random().toString(),
+      role: 'user',
+      content: prompt
+    };
+    setChatMessages(prev => [...prev, userMsg]);
     setGeneratingFlow(true);
+
     try {
-      // Step 1: Get API keys
-      let apiKey: string | null = null;
-      let lmStudioKey: string | null = null;
-      try {
-        const vaultRes = await fetch(`${API_URL}/vault`, { signal: AbortSignal.timeout(3000) });
-        if (vaultRes.ok) {
-          const secrets: any[] = await vaultRes.json();
-          const googleSecret = secrets.find(
-            s => s.name === 'Google API Key' || s.name?.toLowerCase().includes('gemini')
-          );
-          if (googleSecret?.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
-            apiKey = googleSecret.value;
-          }
-          const lmSecret = secrets.find(
-            s => s.name?.toLowerCase().replace(/\s+/g, '').includes('lmstudio')
-          );
-          if (lmSecret?.value) {
-            lmStudioKey = lmSecret.value;
-          }
-        }
-      } catch {
-        // ignore offline
-      }
-
-      const isLm = !!lmStudioKey;
-      
-      const compileSystemInstruction = `You are the brain of Project Stanley, a local browser automation butler.
-Your task is to take a natural language request from a user and translate it into a structured, step-by-step sequence of automation actions in JSON format.
-
-Available actions you can output:
-1. navigate: Goto a URL in the current tab. Keys: "action": "navigate", "url": "URL string"
-2. click: Click on a specific element. Keys: "action": "click", "description": "Short plain English description of what element to click"
-3. type: Type text into an input field. Keys: "action": "type", "description": "Short description of the input field to type into", "value": "Text value to type"
-4. wait: Wait for a specific duration in milliseconds. Keys: "action": "wait", "ms": number of milliseconds
-5. scrape: Scrape structured visible text content from the current tab. Keys: "action": "scrape", "selector": "Optional CSS selector to scope scrape to"
-6. open_tab: Open a new browser tab and optionally navigate to a URL. Keys: "action": "open_tab", "url": "Optional URL string". Returns a new tab index (0-based) you can use with switch_tab.
-7. switch_tab: Switch the active browser tab to a different tab by index. Keys: "action": "switch_tab", "index": number (0-indexed, where 0 is the first tab opened)
-8. close_tab: Close a browser tab by index. Keys: "action": "close_tab", "index": number (0-indexed)
-
-Multi-tab guidance:
-- Tabs are indexed starting at 0. The initial tab opened is always index 0.
-- Use open_tab to open a new tab (optionally with a URL), then switch_tab to go back to a previous tab.
-- When scraping multiple URLs, open each in a new tab, switch to it, scrape, then switch to the next.
-
-Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fences or backticks. Start with [ and end with ].`;
-
-      let resultText = '[]';
-      if (isLm) {
-        // Use LM Studio
-        const lmUrl = 'http://localhost:1234/v1/chat/completions';
-        const lmRes = await fetch(lmUrl, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            ...(lmStudioKey !== 'lm-studio' && lmStudioKey !== 'local' ? { 'Authorization': `Bearer ${lmStudioKey}` } : {})
-          },
-          body: JSON.stringify({
-            model: 'local-model',
-            messages: [
-              { role: 'system', content: compileSystemInstruction },
-              { role: 'user', content: `Translate this user prompt into a structured workflow:\n"${prompt}"` }
-            ],
-            temperature: 0.1
-          })
-        });
-
-        if (!lmRes.ok) {
-          const errText = await lmRes.text();
-          throw new Error(`LM Studio compile error: ${errText}`);
-        }
-
-        const lmData = await lmRes.json();
-        resultText = lmData.choices?.[0]?.message?.content || '[]';
-      } else {
-        // Use Gemini
-        if (!apiKey) {
-          throw new Error(
-            'Stanley needs a Gemini API key or an LM Studio key to compile a flow. Make sure the backend server is running ' +
-            'and add a key in the Credential Vault.'
-          );
-        }
-
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-        const geminiRes = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: `Translate this user prompt into a structured workflow:\n"${prompt}"` }] }],
-            systemInstruction: { parts: [{ text: compileSystemInstruction }] },
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0.1
-            }
-          })
-        });
-
-        if (!geminiRes.ok) {
-          const errText = await geminiRes.text();
-          throw new Error(`Gemini API compile error: ${errText}`);
-        }
-
-        const geminiData = await geminiRes.json();
-        resultText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-      }
-
-      // Clean up markdown block if returned
-      const cleanJson = resultText.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-      const actions = JSON.parse(cleanJson);
-      
+      const actions = await compilePrompt(prompt);
       if (!Array.isArray(actions) || actions.length === 0) {
         throw new Error('AI did not return a valid list of workflow actions.');
       }
-
-      // Map actions to React Flow nodes and edges
       const mapped = mapActionsToGraph(actions);
-
-      // Create new workflow in backend
       const newWfName = `AI: ${prompt.length > 30 ? prompt.substring(0, 27) + '...' : prompt}`;
       const newWf: Workflow = {
         id: Math.random().toString(36).substring(2, 9),
         name: newWfName,
         nodes: mapped.nodes,
-        edges: mapped.edges
+        edges: mapped.edges,
       };
+      await setDoc('workflows', newWf.id, newWf as unknown as Record<string, unknown>);
+      setWorkflows(prev => [...prev, newWf]);
+      loadWorkflowInEditor(newWf);
 
-      const saveRes = await fetch(`${API_URL}/workflows`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newWf)
-      });
+      setChatMessages(prev => [...prev, {
+        id: Math.random().toString(),
+        role: 'stanley',
+        content: `Built a new flow "${newWf.name}" with ${mapped.nodes.length} steps and loaded it into the editor. Switch to Edit Flow to tweak it, or just tell me what to change.`,
+        actionsApplied: [`Created workflow "${newWf.name}"`]
+      }]);
 
-      if (saveRes.ok) {
-        setWorkflows(prev => [...prev, newWf]);
-        setGeneratePrompt('');
-        loadWorkflowInEditor(newWf);
-      } else {
-        throw new Error('Failed to save the generated workflow.');
-      }
+      // After building, switch to edit mode so follow-up messages refine this flow.
+      setChatMode('edit');
     } catch (err: any) {
       console.error(err);
-      alert(`Failed to generate flow: ${err.message}`);
+      setChatMessages(prev => [...prev, {
+        id: Math.random().toString(),
+        role: 'stanley',
+        content: `Failed to build the flow: ${err.message}`
+      }]);
     } finally {
       setGeneratingFlow(false);
+    }
+  };
+
+  // Routes the Copilot Send button to the right handler based on the active mode.
+  const handleCopilotSend = (textToSend?: string) => {
+    if (chatMode === 'build') {
+      handleBuildFlow(textToSend);
+    } else {
+      handleSendChatMessage(textToSend);
     }
   };
 
@@ -1073,47 +901,128 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     setCustomStartUrl(triggerNode?.data?.url || 'https://');
   };
 
+  // Cloud headless run: send the workflow to the Cloud Run service, which executes
+  // it with Playwright server-side and returns the logs when finished.
   const handleRunWorkflow = async () => {
     if (!runWorkflowId) return;
+    const wf = workflows.find(w => w.id === runWorkflowId);
+    if (!wf) return;
+    setRunWorkflowId(null);
+    await executeCloudRun(wf, customStartUrl);
+  };
 
-    try {
-      const res = await fetch(`${API_URL}/run/${runWorkflowId}`, { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startUrl: customStartUrl })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setRunWorkflowId(null);
-        setActiveRunId(data.runId);
-        setActiveRun({
-          id: data.runId,
-          workflowId: runWorkflowId,
-          workflowName: workflows.find(w => w.id === runWorkflowId)?.name || 'Workflow',
+  // Drives a full synchronous cloud run with inline auto-retry, then persists the
+  // finished run to Firestore. Shared by the Run modal and the manual Retry button.
+  const executeCloudRun = async (wf: Workflow, startUrl: string) => {
+    const runId = Math.random().toString(36).substring(2, 9);
+    const startTime = Date.now();
+
+    setPollingLogs(true);
+    setRetryCount(0);
+    setPendingRetryWorkflowId(null);
+    setActiveRun({
+      id: runId,
+      workflowId: wf.id,
+      workflowName: wf.name,
+      status: 'Running',
+      trigger: 'Cloud Headless',
+      duration: '0s',
+      timestamp: new Date().toLocaleString(),
+      logs: ['[System] Sending workflow to the cloud runner…']
+    });
+
+    // Apply the custom start URL to the trigger node, and resolve vault secrets.
+    const secrets = await fetchSecretsMap();
+    const compiledWf = JSON.parse(JSON.stringify(wf));
+    const triggerNode = compiledWf.nodes.find((n: any) => n.type === 'trigger');
+    if (triggerNode && triggerNode.data) triggerNode.data.url = startUrl;
+
+    let finalRun: Run | null = null;
+    let transportError = false;
+
+    for (let attempt = 0; attempt < MAX_AUTO_RETRIES; attempt++) {
+      if (attempt > 0) {
+        setActiveRun(prev => prev ? {
+          ...prev,
           status: 'Running',
-          trigger: 'Manual API',
-          duration: '0s',
-          timestamp: new Date().toLocaleString(),
-          logs: ['[System] Connecting to browser...']
-        });
+          logs: [...(prev.logs || []), `[System] Auto-retry ${attempt}/${MAX_AUTO_RETRIES - 1}…`]
+        } : prev);
       }
-    } catch (err) {
-      console.error(err);
+
+      try {
+        const result = await runHeadless(compiledWf, secrets);
+        const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
+        const logs = (result.logs && result.logs.length)
+          ? [...result.logs]
+          : [result.success ? '[System] Completed.' : '[System] Run failed.'];
+        if (!result.success && result.error) logs.push(`[System] ❌ ${result.error}`);
+
+        finalRun = {
+          id: runId,
+          workflowId: wf.id,
+          workflowName: wf.name,
+          status: result.success ? 'Success' : 'Failed',
+          trigger: 'Cloud Headless',
+          duration,
+          timestamp: new Date().toLocaleString(),
+          logs,
+        };
+        setActiveRun(finalRun);
+        if (result.success) break;        // retry only on run-level failure
+      } catch (err: any) {
+        // Transport/auth/config failure — don't hammer the runner in a loop.
+        const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
+        finalRun = {
+          id: runId,
+          workflowId: wf.id,
+          workflowName: wf.name,
+          status: 'Failed',
+          trigger: 'Cloud Headless',
+          duration,
+          timestamp: new Date().toLocaleString(),
+          logs: [`[System] ❌ ${err.message}`],
+        };
+        setActiveRun(finalRun);
+        transportError = true;
+        break;
+      }
     }
+
+    if (finalRun) {
+      if (finalRun.status === 'Failed') {
+        // Surface the manual Retry button (skip for transport errors that won't self-heal).
+        setRetryCount(MAX_AUTO_RETRIES);
+        if (!transportError) setPendingRetryWorkflowId(wf.id);
+      }
+      await setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
+        .catch(e => console.error('Failed to save run:', e));
+      fetchWorkflowsAndRuns();
+    }
+
+    setPollingLogs(false);
   };
 
   const fetchSecretsMap = async (): Promise<Record<string, string>> => {
     try {
-      const res = await fetch(`${API_URL}/vault`);
-      if (res.ok) {
-        const secretsList = await res.json();
-        const secretsMap: Record<string, string> = {};
-        secretsList.forEach((s: any) => {
-          secretsMap[s.id] = s.value;
-          secretsMap[s.name] = s.value; // key by name and id
-        });
-        return secretsMap;
-      }
+      const secretsList = await listDocs('vault');
+      const secretsMap: Record<string, string> = {};
+      secretsList.forEach((s: any) => {
+        secretsMap[s.id] = s.value;
+        secretsMap[s.name] = s.value;
+        // Login Credentials expose username/email + password as dotted sub-keys,
+        // so a login flow can reference vault:Name.username / vault:Name.password.
+        if (s.username != null) {
+          secretsMap[`${s.id}.username`] = s.username;
+          secretsMap[`${s.name}.username`] = s.username;
+          secretsMap[`${s.id}.email`] = s.username;
+          secretsMap[`${s.name}.email`] = s.username;
+        }
+        if (s.password != null) {
+          secretsMap[`${s.id}.password`] = s.password;
+          secretsMap[`${s.name}.password`] = s.password;
+        }
+      });
+      return secretsMap;
     } catch (err) {
       console.error('Error fetching vault credentials:', err);
     }
@@ -1164,7 +1073,6 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
 
   const handleCloseLogs = () => {
     setActiveRun(null);
-    setActiveRunId(null);     // stop any polling
     setPollingLogs(false);
     setRetryCount(0);
     setPendingRetryWorkflowId(null);
@@ -1187,43 +1095,25 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
 
   const handleManualRetry = async () => {
     if (!pendingRetryWorkflowId) return;
-    try {
-      const res = await fetch(`${API_URL}/run/${pendingRetryWorkflowId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      });
-      const data = await res.json();
-      if (data.success) {
-        setRetryCount(0);
-        setPendingRetryWorkflowId(null);
-        setActiveRunId(data.runId);
-        setActiveRun(prev => prev ? {
-          ...prev,
-          id: data.runId,
-          status: 'Running',
-          logs: [...(prev.logs || []), '[System] Manual retry started...']
-        } : null);
-      }
-    } catch (err) {
-      console.error('Retry failed:', err);
-    }
+    const wf = workflows.find(w => w.id === pendingRetryWorkflowId);
+    if (!wf) return;
+    const triggerNode = wf.nodes.find(n => n.type === 'trigger');
+    await executeCloudRun(wf, triggerNode?.data?.url || customStartUrl || 'https://');
   };
 
   const handleDeleteWorkflow = async (id: string, name: string) => {
     if (!confirm(`Are you sure you want to delete workflow "${name}"?`)) return;
     try {
-      const res = await fetch(`${API_URL}/workflows/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setWorkflows(workflows.filter(w => w.id !== id));
-        if (selectedWorkflow?.id === id) {
-          setSelectedWorkflow(null);
-          setNodes([]);
-          setEdges([]);
-        }
+      await deleteDoc('workflows', id);
+      setWorkflows(workflows.filter(w => w.id !== id));
+      if (selectedWorkflow?.id === id) {
+        setSelectedWorkflow(null);
+        setNodes([]);
+        setEdges([]);
       }
     } catch (err) {
       console.error('Error deleting workflow:', err);
+      alert('Failed to delete workflow. Please try again.');
     }
   };
 
@@ -1242,7 +1132,10 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     const standardEdges: WorkflowEdge[] = edges.map((edge) => ({
       source: edge.source,
       target: edge.target,
-      condition: edge.data?.condition
+      condition: edge.data?.condition,
+      ...(edge.data?.kind === 'context' ? { kind: 'context' } : {}),
+      ...(edge.sourceHandle ? { sourceHandle: edge.sourceHandle } : {}),
+      ...(edge.targetHandle ? { targetHandle: edge.targetHandle } : {})
     }));
 
     const updatedWorkflow: Workflow = {
@@ -1252,29 +1145,120 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     };
 
     try {
-      const res = await fetch(`${API_URL}/workflows`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedWorkflow)
-      });
-      if (res.ok) {
-        alert('Workflow saved successfully!');
-        setWorkflows(workflows.map(w => w.id === updatedWorkflow.id ? updatedWorkflow : w));
-        setSelectedWorkflow(updatedWorkflow);
-      }
+      await setDoc('workflows', updatedWorkflow.id, updatedWorkflow as unknown as Record<string, unknown>);
+      alert('Workflow saved successfully!');
+      setWorkflows(workflows.map(w => w.id === updatedWorkflow.id ? updatedWorkflow : w));
+      setSelectedWorkflow(updatedWorkflow);
     } catch (err) {
       console.error('Error saving workflow:', err);
+      alert('Failed to save workflow. Please try again.');
     }
   };
 
-  const viewLogs = async (run: Run) => {
+  const viewLogs = (run: Run) => {
+    // Runs are stored in full (logs included) in Firestore, so the row we already
+    // have is the complete record — just show it. No server round-trip needed.
+    setActiveRun(run);
+    setPollingLogs(false);
+    setPendingRetryWorkflowId(null);
+  };
+
+  // Launch a real browser and capture the user's actions starting at the record node's URL
+  const handleStartRecordingNode = async (nodeId: string, startUrl: string) => {
+    const url = startUrl.trim() || 'https://';
     try {
-      const res = await fetch(`${API_URL}/runs/${run.id}`);
+      const res = await fetch(`${API_URL}/record/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
       const data = await res.json();
-      setActiveRun(data);
-      setActiveRunId(null); // disable active polling
+      if (res.ok && data.recordingId) {
+        setRecording(true);
+        setRecordingId(data.recordingId);
+        setRecordingNodeId(nodeId);
+      } else {
+        alert(data.error || 'Failed to start recording.');
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Error starting recording:', err);
+      alert('Could not reach the Stanley server to start recording.');
+    }
+  };
+
+  // Stop capturing, map nodes, and splice them inline into the canvas
+  const handleStopRecordingNode = async (nodeId: string) => {
+    if (!recordingId) return;
+    try {
+      const res = await fetch(`${API_URL}/record/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordingId })
+      });
+      const data = await res.json();
+      if (data.success && data.workflow) {
+        const wf = data.workflow as Workflow;
+
+        // Find the record node to get its position
+        const recordNode = nodes.find(n => n.id === nodeId);
+        if (!recordNode) return;
+
+        const posX = recordNode.position.x;
+        const posY = recordNode.position.y;
+
+        const idMap = new Map<string, string>();
+        const newNodes: MyRFNode[] = wf.nodes.map((node, index) => {
+          const newId = Math.random().toString(36).substring(2, 9);
+          idMap.set(node.id, newId);
+          return {
+            id: newId,
+            type: 'workflowNode',
+            position: { x: posX + index * 50, y: posY + index * 140 },
+            data: {
+              id: newId,
+              type: node.type,
+              label: node.label,
+              data: node.data || {},
+              onDelete: handleDeleteNode
+            }
+          };
+        });
+
+        const newEdges: MyRFEdge[] = wf.edges.map(edge => ({
+          id: `e-${Math.random().toString(36).substring(2, 9)}`,
+          source: idMap.get(edge.source) || edge.source,
+          target: idMap.get(edge.target) || edge.target,
+          data: edge.condition ? { condition: edge.condition } : undefined
+        }));
+
+        const firstNewNodeId = newNodes.length > 0 ? newNodes[0].id : null;
+        const lastNewNodeId = newNodes.length > 0 ? newNodes[newNodes.length - 1].id : null;
+
+        const updatedEdges = edges.map(edge => {
+          if (edge.target === nodeId && firstNewNodeId) {
+            return { ...edge, target: firstNewNodeId };
+          }
+          if (edge.source === nodeId && lastNewNodeId) {
+            return { ...edge, source: lastNewNodeId };
+          }
+          return edge;
+        }).filter(edge => edge.source !== nodeId && edge.target !== nodeId);
+
+        const finalEdges = [...updatedEdges, ...newEdges];
+        const finalNodes = nodes.filter(n => n.id !== nodeId).concat(newNodes);
+
+        setNodes(finalNodes);
+        setEdges(finalEdges);
+        setSelectedNodeId(null);
+      } else {
+        alert(data.error || 'Failed to generate workflow from recording.');
+      }
+    } catch (err) {
+      console.error('Error stopping recording:', err);
+    } finally {
+      setRecording(false);
+      setRecordingId(null);
+      setRecordingNodeId(null);
     }
   };
 
@@ -1292,6 +1276,14 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     else if (type === 'switch_tab' || type === 'close_tab') nodeData = { tab: '' };
     else if (type === 'ai_prompt') nodeData = { prompt: 'Summarize this text: {{lastScrape}}', system: '' };
     else if (type === 'js_code') nodeData = { code: '// Execute Playwright operations on browser context\nconst urls = context.variables.searchResults || [];\nif (urls.length > 0) {\n  await context.agent.navigate(urls[0]);\n  const text = await context.agent.scrapeContent("body");\n  return await context.ai.prompt({ prompt: "Summarize: " + text });\n}' };
+    else if (type === 'record') nodeData = { url: 'https://' };
+    else if (type === 'mission') nodeData = { prompt: '' };
+    else if (type === 'parameter') nodeData = { value: '' };
+    else if (type === 'extract') nodeData = { selector: '', schema: '{\n  "title": "string",\n  "description": "string"\n}' };
+    else if (type === 'extract_list') nodeData = { selector: '', schema: '[\n  {\n    "name": "string",\n    "price": "string"\n  }\n]' };
+    else if (type === 'paginate') nodeData = { selector: '', description: '', maxPages: '3', actionNodeId: '' };
+    else if (type === 'agent') nodeData = { goal: '', maxSteps: '8' };
+    else if (type === 'integration') nodeData = { integrationName: 'gmail_list_messages', query: '' };
     else nodeData = { selector: '' };
 
     const labelMap: Record<string, string> = {
@@ -1308,7 +1300,15 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
       goto: 'Goto Label',
       label: 'Label Anchor',
       ai_prompt: 'AI Gemini Prompt',
-      js_code: 'Custom JS Script'
+      js_code: 'Custom JS Script',
+      record: 'Record Steps',
+      mission: 'Mission Goal',
+      parameter: 'Parameter Set',
+      extract: 'Extract Data',
+      extract_list: 'Extract List',
+      paginate: 'Paginate Scrape',
+      agent: 'Agent Mode',
+      integration: 'API Integration'
     };
 
     const newNode: MyRFNode = {
@@ -1365,6 +1365,19 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     );
   };
 
+  // Replace the entire data object of the selected node (used by the parameter
+  // node's key/value editor, where keys are arbitrary).
+  const replaceSelectedNodeData = (newData: Record<string, any>) => {
+    if (!selectedNodeId) return;
+    setNodes((nds) =>
+      nds.map((node) =>
+        node.id === selectedNodeId
+          ? { ...node, data: { ...node.data, data: newData } }
+          : node
+      )
+    );
+  };
+
   // Update visual node title/label
   const updateNodeTitle = (title: string) => {
     if (!selectedNodeId) return;
@@ -1415,12 +1428,35 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
     );
   };
 
-  // Node connection callback
+  // Disconnect: remove the selected edge (also reachable via Delete/Backspace).
+  const handleDeleteEdge = () => {
+    if (!selectedEdgeId) return;
+    setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+  };
+
+  // Node connection callback. If either endpoint is a mission/parameter node the
+  // edge is a CONTEXT edge (attaches goal/params, not execution flow): rendered
+  // dashed + purple and tagged kind:'context' so the engine excludes it from routing.
   const onConnect = useCallback(
     (params: Connection) => {
-      setEdges((eds) => addEdge({ ...params, type: 'smoothstep', label: '', data: { condition: undefined } }, eds));
+      setEdges((eds) => {
+        const endpoints = [params.source, params.target]
+          .map((id) => nodes.find((n) => n.id === id));
+        const isContext = endpoints.some(
+          (n) => n && (n.data.type === 'mission' || n.data.type === 'parameter')
+        );
+        return addEdge({
+          ...params,
+          type: 'smoothstep',
+          label: isContext ? 'context' : '',
+          animated: isContext,
+          style: isContext ? { stroke: '#a855f7', strokeDasharray: '5 5' } : undefined,
+          data: { condition: undefined, kind: isContext ? 'context' : undefined },
+        }, eds);
+      });
     },
-    [setEdges]
+    [setEdges, nodes]
   );
 
   const currentNode = useMemo(() => {
@@ -1436,7 +1472,7 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
       <div className="view-header">
         <div>
           <h1>Automation Cockpit</h1>
-          <p>Monitor, design, and execute your visual flow automations.</p>
+          <p>Build with AI, design the visual flow, and execute &mdash; all in one place.</p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {!showChat && (
@@ -1444,7 +1480,7 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
               <Sparkles size={16} style={{ marginRight: '4px', color: '#a855f7' }} /> Open Copilot
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+          <button className="btn btn-primary" onClick={handleNewAutomation}>
             <Plus size={16} /> New Automation
           </button>
         </div>
@@ -1474,7 +1510,7 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
 
       <div className="editor-workspace" style={{ marginTop: '1.5rem', height: 'calc(100vh - 280px)', overflow: 'hidden', display: 'flex', gap: '1rem' }}>
         {/* Left Column: Monitor, Saved workflows list and logs history */}
-        <div className="glass-panel" style={{ width: '27%', display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
+        <div className="glass-panel" style={{ width: '23%', display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
           {/* Workflows Directory */}
           <div className="data-table-container">
             <h3 style={{ marginBottom: '0.75rem', fontSize: '0.95rem', borderBottom: '1px solid var(--border-strong)', paddingBottom: '0.5rem' }}>Workflows Directory</h3>
@@ -1483,7 +1519,7 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
             ) : workflows.length === 0 ? (
               <div className="empty-state">No workflows found. Create one to get started!</div>
             ) : (
-              <table className="data-table">
+              <table className="data-table compact-table">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -1501,12 +1537,12 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                       <td className="font-medium">{w.name}</td>
                       <td>{w.nodes.length} nodes</td>
                       <td>
-                        <div className="action-buttons" onClick={(e) => e.stopPropagation()}>
-                          <button className="btn btn-primary btn-sm" onClick={() => handleOpenRunModal(w)} title="Run Workflow">
+                        <div className="action-buttons" onClick={(e) => e.stopPropagation()} style={{ flexDirection: 'column', gap: '4px', alignItems: 'stretch' }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => handleOpenRunModal(w)} title="Run Workflow" style={{ justifyContent: 'center' }}>
                             <Play size={12} /> Run
                           </button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => handleDeleteWorkflow(w.id, w.name)} title="Delete Workflow">
-                            <Trash2 size={12} />
+                          <button className="btn btn-secondary btn-sm" onClick={() => handleDeleteWorkflow(w.id, w.name)} title="Delete Workflow" style={{ justifyContent: 'center' }}>
+                            <Trash2 size={12} /> Delete
                           </button>
                         </div>
                       </td>
@@ -1557,64 +1593,20 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
           </div>
         </div>
 
-        {/* Center Column: Visual editor graph / Generator Card */}
-        <div style={{ width: showChat ? '48%' : '73%', display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', transition: 'width 0.2s ease-in-out' }}>
-          {/* Build Your Flow Card */}
-          <div className="glass-panel" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-              <Sparkles size={14} style={{ color: '#3b82f6' }} />
-              <h3 style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600 }}>Build Your Flow with AI</h3>
-            </div>
-            <p style={{ fontSize: '0.7rem', color: 'var(--text-text-secondary)', margin: 0 }}>
-              Describe your automation in plain English. Stanley will automatically generate a complete visual node graph for you.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
-              <input 
-                type="text" 
-                className="form-input" 
-                placeholder="e.g., Navigate to amazon.com, type 'iPhone 15 case', wait 3 seconds, then scrape results" 
-                style={{ fontSize: '0.75rem', padding: '5px 8px' }}
-                value={generatePrompt}
-                onChange={(e) => setGeneratePrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleGenerateFlow();
-                  }
-                }}
-                disabled={generatingFlow}
-              />
-              <button 
-                className="btn btn-primary" 
-                style={{ 
-                  background: 'linear-gradient(135deg, #3b82f6 0%, #a855f7 100%)', 
-                  border: 'none', 
-                  fontSize: '0.75rem',
-                  padding: '4px 10px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  whiteSpace: 'nowrap'
-                }}
-                onClick={handleGenerateFlow}
-                disabled={generatingFlow || !generatePrompt.trim()}
-              >
-                {generatingFlow ? (
-                  <>
-                    <Loader className="spinner" size={10} /> Generating...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={10} /> Generate
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
+        {/* Center Column: Visual editor graph */}
+        <div style={{ width: showChat ? '52%' : '77%', display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', transition: 'width 0.2s ease-in-out' }}>
           {selectedWorkflow ? (
             <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
               <div className="editor-header" style={{ borderBottom: '1px solid var(--border-strong)', padding: '0.5rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="font-medium" style={{ fontSize: '0.9rem' }}>Visual Graph: {selectedWorkflow.name}</span>
+                <input
+                  className="font-medium workflow-name-input"
+                  style={{ fontSize: '0.9rem', flex: 1, marginRight: '0.5rem', minWidth: 0 }}
+                  value={selectedWorkflow.name}
+                  onChange={(e) => updateWorkflowName(e.target.value)}
+                  onBlur={commitWorkflowName}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                  title="Click to rename this automation"
+                />
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button 
                     className={`btn btn-sm ${showChat ? 'btn-primary' : 'btn-secondary'}`} 
@@ -1624,16 +1616,40 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                     <Sparkles size={14} style={{ marginRight: '4px' }} className={chatLoading ? 'spinner' : ''} />
                     {showChat ? 'Close Copilot' : 'Chat with Stanley'}
                   </button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setShowTriggers(true)} title="Schedule this automation or expose a webhook">
+                    <Clock size={14} /> Triggers
+                  </button>
                   <button className="btn btn-secondary btn-sm" onClick={handleSaveWorkflow}>
                     <Save size={14} /> Save Draft
                   </button>
                 </div>
               </div>
 
+              {recording && (
+                <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', margin: '0.5rem 1rem 0', color: '#dc2626', fontWeight: 600, fontSize: '0.8rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Circle size={12} fill="#dc2626" className="spinner" />
+                    <span>Recording steps... Perform actions in the browser window.</span>
+                  </div>
+                  {recordingNodeId && (
+                    <button 
+                      className="btn btn-sm btn-primary" 
+                      style={{ background: '#dc2626', borderColor: '#dc2626', padding: '2px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      onClick={() => handleStopRecordingNode(recordingNodeId)}
+                    >
+                      <Square size={10} /> Stop &amp; Generate
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 {/* Visual Editor sidebar for dragging nodes */}
                 <div style={{ width: '130px', padding: '0.5rem', background: 'rgba(255,255,255,0.01)', borderRight: '1px solid var(--border-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.45)' }} onClick={() => addNode('mission')}><Target size={12}/> Mission</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.45)' }} onClick={() => addNode('parameter')}><Tag size={12}/> Parameter</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('navigate')}><Globe size={12}/> Navigate</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)' }} onClick={() => addNode('record')}><Circle size={12} className="text-accent-danger" fill="#ef4444"/> Record Steps</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('click')}><Plus size={12}/> Click</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('type')}><Type size={12}/> Type</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('scrape')}><Database size={12}/> Scrape</button>
@@ -1646,6 +1662,11 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('wait')}><Clock size={12}/> Wait</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.4)' }} onClick={() => addNode('ai_prompt')}><Sparkles size={12}/> AI Prompt</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)' }} onClick={() => addNode('js_code')}><Code size={12}/> JS Script</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.4)' }} onClick={() => addNode('extract')}><Database size={12}/> Extract</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(5, 150, 105, 0.15)', border: '1px solid rgba(5, 150, 105, 0.4)' }} onClick={() => addNode('extract_list')}><Database size={12}/> Extract List</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)' }} onClick={() => addNode('paginate')}><RefreshCw size={12}/> Paginate</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.4)' }} onClick={() => addNode('agent')}><Sparkles size={12}/> Agent</button>
+                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)' }} onClick={() => addNode('integration')}><Globe size={12}/> Integration</button>
                 </div>
 
                 {/* Canvas graph */}
@@ -1658,6 +1679,7 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                     onConnect={onConnect}
                     nodeTypes={nodeTypes}
                     onSelectionChange={onSelectionChange}
+                    deleteKeyCode={['Backspace', 'Delete']}
                     fitView
                   >
                     <Background color="#ffffff" gap={16} />
@@ -1681,9 +1703,11 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                       />
                     </div>
 
-                    {(currentNode.data.type === 'trigger' || currentNode.data.type === 'navigate') && (
-                      <div style={{ flex: 2, minWidth: '200px' }}>
-                        <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Target URL</label>
+                    {(currentNode.data.type === 'trigger' || currentNode.data.type === 'navigate' || currentNode.data.type === 'record') && (
+                      <div style={{ flex: 1.5, minWidth: '200px' }}>
+                        <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>
+                          {currentNode.data.type === 'record' ? 'Start URL' : 'Target URL'}
+                        </label>
                         <input 
                           type="text" 
                           className="form-input" 
@@ -1691,6 +1715,32 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                           value={currentNode.data.data?.url || ''} 
                           onChange={(e) => updateNodeDataField('url', e.target.value)} 
                         />
+                      </div>
+                    )}
+
+                    {currentNode.data.type === 'record' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '180px' }}>
+                        {recording && recordingNodeId === currentNode.id ? (
+                          <button 
+                            className="btn btn-primary" 
+                            style={{ background: '#dc2626', borderColor: '#dc2626', padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }} 
+                            onClick={() => handleStopRecordingNode(currentNode.id)}
+                          >
+                            <Square size={12} /> Stop &amp; Generate
+                          </button>
+                        ) : (
+                          <button 
+                            className="btn btn-primary" 
+                            style={{ background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)', borderColor: 'transparent', padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', boxShadow: '0 0 8px rgba(239, 68, 68, 0.3)' }} 
+                            onClick={() => handleStartRecordingNode(currentNode.id, currentNode.data.data?.url || 'https://')}
+                            disabled={recording}
+                          >
+                            <Circle size={12} fill="#ffffff" /> Start Recording
+                          </button>
+                        )}
+                        {recording && recordingNodeId !== currentNode.id && (
+                          <span style={{ fontSize: '0.7rem', color: '#ef4444' }}>Active elsewhere</span>
+                        )}
                       </div>
                     )}
 
@@ -1873,6 +1923,84 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
                       </>
                     )}
 
+                    {currentNode.data.type === 'mission' && (
+                      <div style={{ flex: 1, minWidth: '350px' }}>
+                        <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>
+                          {"Mission Goal — the overall objective. Given to the AI on every step so it understands the why, not just the what."}
+                        </label>
+                        <textarea
+                          className="form-input"
+                          style={{ padding: '6px 8px', fontSize: '0.8rem', minHeight: '70px' }}
+                          rows={3}
+                          placeholder="e.g. Book a one-way flight from NYC to LA next Friday for under $300, using the cheapest available fare."
+                          value={currentNode.data.data?.prompt || ''}
+                          onChange={(e) => updateNodeDataField('prompt', e.target.value)}
+                        />
+                        <p style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                          Connect this node to anything — the dashed link marks it as context, not a step.
+                        </p>
+                      </div>
+                    )}
+
+                    {currentNode.data.type === 'parameter' && (
+                      <div style={{ flex: 1, minWidth: '350px' }}>
+                        <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '4px' }}>
+                          {"Parameters — fed to the step this node is wired to. Use `value` to set what gets typed/used; reference vault secrets with vault:SecretName."}
+                        </label>
+                        {Object.entries(currentNode.data.data || {}).map(([k, v], idx) => (
+                          <div key={idx} style={{ display: 'flex', gap: '6px', marginBottom: '4px', alignItems: 'center' }}>
+                            <input
+                              type="text"
+                              className="form-input"
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', flex: 1 }}
+                              placeholder="key (e.g. value, account)"
+                              value={k}
+                              onChange={(e) => {
+                                const entries = Object.entries(currentNode.data.data || {});
+                                entries[idx] = [e.target.value, entries[idx][1]];
+                                replaceSelectedNodeData(Object.fromEntries(entries));
+                              }}
+                            />
+                            <input
+                              type="text"
+                              className="form-input"
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', flex: 1.5 }}
+                              placeholder="value (e.g. vault:WorkEmail)"
+                              value={String(v ?? '')}
+                              onChange={(e) => {
+                                const entries = Object.entries(currentNode.data.data || {});
+                                entries[idx] = [entries[idx][0], e.target.value];
+                                replaceSelectedNodeData(Object.fromEntries(entries));
+                              }}
+                            />
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '2px 6px' }}
+                              title="Remove field"
+                              onClick={() => {
+                                const entries = Object.entries(currentNode.data.data || {}).filter((_, i) => i !== idx);
+                                replaceSelectedNodeData(Object.fromEntries(entries));
+                              }}
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ marginTop: '2px', fontSize: '0.7rem' }}
+                          onClick={() => {
+                            const data = { ...(currentNode.data.data || {}) };
+                            let i = 1; let key = 'field';
+                            while (Object.prototype.hasOwnProperty.call(data, key)) key = `field${i++}`;
+                            replaceSelectedNodeData({ ...data, [key]: '' });
+                          }}
+                        >
+                          <Plus size={12} /> Add field
+                        </button>
+                      </div>
+                    )}
+
                     {currentNode.data.type === 'js_code' && (
                       <div style={{ flex: 1, minWidth: '350px' }}>
                         <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', display: 'block', marginBottom: '2px' }}>
@@ -1892,9 +2020,166 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                         />
                       </div>
                     )}
+
+                    {(currentNode.data.type === 'extract' || currentNode.data.type === 'extract_list') && (
+                      <>
+                        <div style={{ flex: 1.5, minWidth: '200px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>CSS Selector (Optional scope)</label>
+                          <input 
+                            type="text" 
+                            className="form-input" 
+                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            placeholder="e.g. #results-list, .article-body"
+                            value={currentNode.data.data?.selector || ''} 
+                            onChange={(e) => updateNodeDataField('selector', e.target.value)} 
+                          />
+                        </div>
+                        <div style={{ flex: 2, minWidth: '300px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Target JSON Schema</label>
+                          <textarea 
+                            className="form-input" 
+                            style={{ padding: '6px 8px', fontSize: '0.75rem', minHeight: '80px', fontFamily: 'monospace' }}
+                            rows={4}
+                            placeholder='e.g. { "title": "string", "price": "number" }'
+                            value={currentNode.data.data?.schema || ''} 
+                            onChange={(e) => updateNodeDataField('schema', e.target.value)} 
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {currentNode.data.type === 'paginate' && (
+                      <>
+                        <div style={{ flex: 1, minWidth: '150px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Next Page Selector / Description</label>
+                          <input 
+                            type="text" 
+                            className="form-input" 
+                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            placeholder="e.g. button.next-page, next arrow link"
+                            value={currentNode.data.data?.selector || currentNode.data.data?.description || ''} 
+                            onChange={(e) => {
+                              updateNodeDataField('selector', e.target.value);
+                              updateNodeDataField('description', e.target.value);
+                            }} 
+                          />
+                        </div>
+                        <div style={{ flex: 0.5, minWidth: '100px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Max Pages</label>
+                          <input 
+                            type="number" 
+                            className="form-input" 
+                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            min={1}
+                            max={50}
+                            value={currentNode.data.data?.maxPages || '3'} 
+                            onChange={(e) => updateNodeDataField('maxPages', e.target.value)} 
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: '180px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Scrape Node to Run on Each Page</label>
+                          <select
+                            className="form-input select-workflow"
+                            style={{ padding: '4px 8px', fontSize: '0.8rem', height: 'auto' }}
+                            value={currentNode.data.data?.actionNodeId || ''}
+                            onChange={(e) => updateNodeDataField('actionNodeId', e.target.value)}
+                          >
+                            <option value="">-- Select Scrape Node --</option>
+                            {nodes.filter(n => n.id !== currentNode.id && ['scrape', 'extract', 'extract_list', 'ai_prompt'].includes(n.data.type)).map(n => (
+                              <option key={n.id} value={n.id}>{n.data.label || `${n.data.type} (${n.id})`}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
+
+                    {currentNode.data.type === 'agent' && (
+                      <>
+                        <div style={{ flex: 2, minWidth: '280px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Agent Goal (What should the AI explore and find?)</label>
+                          <textarea 
+                            className="form-input" 
+                            style={{ padding: '6px 8px', fontSize: '0.8rem', minHeight: '60px' }}
+                            rows={3}
+                            placeholder="e.g. Find the contact email link on the page, click it, and copy the email."
+                            value={currentNode.data.data?.goal || ''} 
+                            onChange={(e) => updateNodeDataField('goal', e.target.value)} 
+                          />
+                        </div>
+                        <div style={{ flex: 0.5, minWidth: '100px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Max Steps</label>
+                          <input 
+                            type="number" 
+                            className="form-input" 
+                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            min={1}
+                            max={30}
+                            value={currentNode.data.data?.maxSteps || '8'} 
+                            onChange={(e) => updateNodeDataField('maxSteps', e.target.value)} 
+                          />
+                        </div>
+                        {/* Trace Crystallization Section */}
+                        {(() => {
+                          const latestRun = runs.find(r => r.workflowId === selectedWorkflow?.id && r.scraped && r.scraped[currentNode.id]);
+                          const trace = latestRun?.scraped?.[currentNode.id];
+                          if (trace && Array.isArray(trace) && trace.length > 0) {
+                            return (
+                              <div style={{ flex: 1.5, minWidth: '200px', display: 'flex', flexDirection: 'column', gap: '6px', background: 'rgba(168, 85, 247, 0.08)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                                <div style={{ fontSize: '0.72rem', color: '#a855f7', fontWeight: 600 }}>Crystallize Execution Trace</div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+                                  Found successful run with {trace.length} steps taken by the Agent. Bake this trace into static, cheap click/type nodes?
+                                </div>
+                                <button 
+                                  className="btn btn-primary btn-sm" 
+                                  style={{ background: '#a855f7', borderColor: '#a855f7', padding: '3px 8px', fontSize: '0.7rem', alignSelf: 'flex-start' }}
+                                  onClick={() => handleCrystallizeAgent(currentNode.id, trace)}
+                                >
+                                  Crystallize Trace
+                                </button>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </>
+                    )}
+
+                    {currentNode.data.type === 'integration' && (
+                      <>
+                        <div style={{ flex: 1.5, minWidth: '180px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Integration Service</label>
+                          <select 
+                            className="form-input select-workflow"
+                            style={{ padding: '4px 8px', fontSize: '0.8rem', height: 'auto' }}
+                            value={currentNode.data.data?.integrationName || 'gmail_list_messages'}
+                            onChange={(e) => updateNodeDataField('integrationName', e.target.value)}
+                          >
+                            <option value="gmail_list_messages">Gmail: List Messages</option>
+                            <option value="shopify_list_orders">Shopify: List Orders</option>
+                          </select>
+                        </div>
+                        <div style={{ flex: 2, minWidth: '200px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Search Query (optional)</label>
+                          <input 
+                            type="text" 
+                            className="form-input" 
+                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            placeholder="e.g. from:billing"
+                            value={currentNode.data.data?.query || ''} 
+                            onChange={(e) => updateNodeDataField('query', e.target.value)} 
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 ) : currentEdge ? (
-                  <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    {currentEdge.data?.kind === 'context' ? (
+                      <div style={{ flex: 1, minWidth: '200px', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        <span style={{ color: '#a855f7', fontWeight: 600 }}>Context link</span> — attaches a parameter/mission to this step. No routing condition.
+                      </div>
+                    ) : (
+                    <>
                     <div style={{ flex: 1.5, minWidth: '180px' }}>
                       <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Routing Condition</label>
                       <select 
@@ -1933,18 +2218,30 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                      ['contains', 'notContains', 'exists', 'notExists'].includes(currentEdge.data?.condition?.type || '') && (
                       <div style={{ flex: 1, minWidth: '150px' }}>
                         <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Condition Value</label>
-                        <input 
-                          type="text" 
-                          className="form-input" 
+                        <input
+                          type="text"
+                          className="form-input"
                           style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                          value={currentEdge.data?.condition?.value || ''} 
+                          value={currentEdge.data?.condition?.value || ''}
                           onChange={(e) => {
                             const type = currentEdge.data?.condition?.type || '';
                             updateEdgeConditionField(type, e.target.value);
-                          }} 
+                          }}
                         />
                       </div>
                     )}
+                    </>
+                    )}
+                    <div>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        style={{ borderColor: 'var(--error)', color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        onClick={handleDeleteEdge}
+                        title="Remove this connection (or press Delete)"
+                      >
+                        <Trash2 size={12} /> Disconnect
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', paddingTop: '1.5rem', fontSize: '0.85rem' }}>
@@ -1958,7 +2255,7 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               <GitFork size={48} style={{ marginBottom: '1rem', color: 'var(--border-strong)' }} />
               <h3>No Workflow Selected</h3>
               <p style={{ fontSize: '0.85rem', maxWidth: '300px', margin: '0.5rem auto 0 auto' }}>
-                Select a workflow from the directory on the left or type a prompt above to auto-generate a new one!
+                Select a workflow from the directory on the left, or ask the Copilot to <strong>Build New Flow</strong> from a plain-English description.
               </p>
             </div>
           )}
@@ -2019,90 +2316,109 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               )}
             </div>
 
-            <div className="chat-suggestions">
-              <button 
-                className="suggestion-chip" 
-                onClick={() => handleSendChatMessage('Create a google search automation flow')}
+            {/* Mode toggle: Build a brand-new flow, or Edit the selected one */}
+            <div className="chat-mode-toggle" style={{ display: 'flex', gap: '4px', padding: '8px 12px 0' }}>
+              <button
+                className={`mode-toggle-btn ${chatMode === 'edit' ? 'active' : ''}`}
+                onClick={() => setChatMode('edit')}
+                style={{
+                  flex: 1, fontSize: '0.7rem', padding: '5px 8px', borderRadius: '6px', cursor: 'pointer',
+                  border: '1px solid ' + (chatMode === 'edit' ? '#a855f7' : 'var(--border-strong)'),
+                  background: chatMode === 'edit' ? 'rgba(168, 85, 247, 0.15)' : 'transparent',
+                  color: chatMode === 'edit' ? '#a855f7' : 'var(--text-tertiary)',
+                  fontWeight: chatMode === 'edit' ? 600 : 400,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
+                }}
               >
-                🔍 Google Search Flow
+                💬 Edit Flow
               </button>
-              <button 
-                className="suggestion-chip" 
-                onClick={() => handleSendChatMessage('Add a wait node for 3 seconds')}
+              <button
+                className={`mode-toggle-btn ${chatMode === 'build' ? 'active' : ''}`}
+                onClick={() => setChatMode('build')}
+                style={{
+                  flex: 1, fontSize: '0.7rem', padding: '5px 8px', borderRadius: '6px', cursor: 'pointer',
+                  border: '1px solid ' + (chatMode === 'build' ? '#3b82f6' : 'var(--border-strong)'),
+                  background: chatMode === 'build' ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                  color: chatMode === 'build' ? '#3b82f6' : 'var(--text-tertiary)',
+                  fontWeight: chatMode === 'build' ? 600 : 400,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
+                }}
               >
-                ⏱️ Add 3s Wait
-              </button>
-              <button 
-                className="suggestion-chip" 
-                onClick={() => handleSendChatMessage('Write a JS script to scrape article links')}
-              >
-                💻 Scrape JS Script
+                <Sparkles size={11} /> Build New Flow
               </button>
             </div>
 
+            <div className="chat-suggestions">
+              {chatMode === 'build' ? (
+                <>
+                  <button
+                    className="suggestion-chip"
+                    onClick={() => handleBuildFlow('Search Google for the latest AI news and scrape the results')}
+                  >
+                    🔍 Google Search Flow
+                  </button>
+                  <button
+                    className="suggestion-chip"
+                    onClick={() => handleBuildFlow('Go to amazon.com, search for "iPhone 15 case", wait 3 seconds, then scrape the results')}
+                  >
+                    🛒 Scrape Amazon Prices
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="suggestion-chip"
+                    onClick={() => handleSendChatMessage('Add a wait node for 3 seconds')}
+                  >
+                    ⏱️ Add 3s Wait
+                  </button>
+                  <button
+                    className="suggestion-chip"
+                    onClick={() => handleSendChatMessage('Write a JS script to scrape article links')}
+                  >
+                    💻 Scrape JS Script
+                  </button>
+                </>
+              )}
+            </div>
+
             <div className="chat-input-container">
-              <input 
-                type="text" 
+              <input
+                type="text"
                 className="chat-input"
-                placeholder="Ask Stanley to help..."
+                placeholder={chatMode === 'build'
+                  ? 'Describe the automation you want to build…'
+                  : 'Ask Stanley to edit your flow…'}
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    handleSendChatMessage();
+                    handleCopilotSend();
                   }
                 }}
-                disabled={chatLoading}
+                disabled={chatLoading || generatingFlow}
               />
-              <button 
-                className="btn btn-primary" 
-                style={{ padding: '4px 10px', fontSize: '0.8rem', background: '#a855f7', borderColor: '#a855f7' }}
-                onClick={() => handleSendChatMessage()}
-                disabled={chatLoading}
+              <button
+                className="btn btn-primary"
+                style={{
+                  padding: '4px 10px', fontSize: '0.8rem',
+                  background: chatMode === 'build' ? '#3b82f6' : '#a855f7',
+                  borderColor: chatMode === 'build' ? '#3b82f6' : '#a855f7',
+                  display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap'
+                }}
+                onClick={() => handleCopilotSend()}
+                disabled={chatLoading || generatingFlow}
               >
-                Send
+                {generatingFlow
+                  ? (<><Loader className="spinner" size={12} /> Building…</>)
+                  : chatMode === 'build'
+                    ? (<><Sparkles size={12} /> Build</>)
+                    : 'Send'}
               </button>
             </div>
           </div>
         )}
       </div>
-
-      {/* Create Workflow Modal */}
-      {showCreateModal && (
-        <div className="modal-overlay">
-          <div className="modal-content glass-panel">
-            <h2>Create Workflow</h2>
-            <form onSubmit={handleCreateWorkflow}>
-              <div className="form-group">
-                <label>Workflow Name</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  value={newWorkflowName} 
-                  onChange={(e) => setNewWorkflowName(e.target.value)} 
-                  placeholder="e.g. Google Search scraper" 
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>Initial Trigger URL</label>
-                <input 
-                  type="url" 
-                  className="form-input" 
-                  value={newWorkflowUrl} 
-                  onChange={(e) => setNewWorkflowUrl(e.target.value)} 
-                  placeholder="https://example.com" 
-                  required
-                />
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Create</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Run Workflow URL Input Modal */}
       {runWorkflowId && (
@@ -2123,20 +2439,32 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setRunWorkflowId(null)}>Cancel</button>
               {extensionActive && (
-                <button 
-                  className="btn btn-primary" 
-                  style={{ background: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)', borderColor: 'transparent', boxShadow: '0 0 10px rgba(168, 85, 247, 0.4)' }} 
+                <button
+                  className="btn btn-primary"
+                  style={{ background: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)', borderColor: 'transparent', boxShadow: '0 0 10px rgba(168, 85, 247, 0.4)' }}
                   onClick={handleRunWorkflowInBrowser}
                 >
                   <Play size={14} style={{ display: 'inline', marginRight: '4px' }}/> Run in Browser
                 </button>
               )}
-              <button className="btn btn-primary" onClick={handleRunWorkflow}>
-                <Play size={14} style={{ display: 'inline', marginRight: '4px' }}/> Launch Headless Run
+              <button
+                className="btn btn-primary"
+                onClick={handleRunWorkflow}
+                disabled={!isHeadlessConfigured()}
+                title={isHeadlessConfigured()
+                  ? 'Run this workflow headless in the cloud'
+                  : 'Cloud runner not configured (VITE_RUNNER_URL is unset)'}
+              >
+                <Play size={14} style={{ display: 'inline', marginRight: '4px' }}/> Run Headless (Cloud)
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Triggers (schedule + webhook) modal */}
+      {showTriggers && selectedWorkflow && (
+        <TriggersPanel workflow={{ id: selectedWorkflow.id, name: selectedWorkflow.name }} onClose={() => setShowTriggers(false)} />
       )}
 
       {/* Logs Details Modal */}
