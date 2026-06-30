@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import './Views.css';
 import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
-import { chatCopilot, compilePrompt } from '../lib/stanleyCloud';
+import { chatCopilot, compilePrompt, runAiAnalysis } from '../lib/stanleyCloud';
 import { runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
 import { TriggersPanel } from '../components/TriggersPanel';
 
@@ -212,7 +212,7 @@ const nodeTypes = {
   workflowNode: WorkflowNodeComponent
 };
 
-const mapActionsToGraph = (actions: any[]) => {
+const mapActionsToGraph = (actions: any[], prompt: string) => {
   const nodes: any[] = [];
   const edges: any[] = [];
   
@@ -230,6 +230,24 @@ const mapActionsToGraph = (actions: any[]) => {
     label: 'Start Trigger',
     data: { url: triggerUrl },
     position: { x: 250, y: 50 }
+  });
+
+  // Add Mission supernode
+  nodes.push({
+    id: 'mission-1',
+    type: 'mission',
+    label: 'Mission Context',
+    data: { prompt: prompt },
+    position: { x: 30, y: -50 }
+  });
+
+  // Connect Mission to Trigger
+  edges.push({
+    id: `e-mission-1-1`,
+    source: 'mission-1',
+    target: '1',
+    type: 'smoothstep',
+    data: { kind: 'context' }
   });
   
   let currentY = 190;
@@ -309,6 +327,25 @@ const mapActionsToGraph = (actions: any[]) => {
     currentY += 140;
   });
   
+  // Add an AI Prompt node at the end
+  const finalNodeId = String(nodeCount++);
+  nodes.push({
+    id: finalNodeId,
+    type: 'ai_prompt',
+    label: 'Final AI Analysis',
+    data: { prompt: "Analyze the scraped results or execution history and provide the final output requested by the user." },
+    position: { x: 250, y: currentY }
+  });
+  
+  // Connect to the AI Prompt node
+  const lastRealNodeId = String(nodeCount - 2);
+  edges.push({
+    id: `e-${lastRealNodeId}-${finalNodeId}`,
+    source: lastRealNodeId,
+    target: finalNodeId,
+    type: 'smoothstep'
+  });
+
   return { nodes, edges };
 };
 
@@ -391,8 +428,16 @@ export function CockpitInner() {
       if (e.data.cmd === 'ping_response') {
         setExtensionActive(true);
       } else if (e.data.cmd === 'workflow_event') {
-        const { action, log, error, result } = e.data;
-        if (action === 'native_log') {
+        const { action, log, error, result, reqId, prompt, context } = e.data;
+        if (action === 'run_ai_prompt') {
+          runAiAnalysis(prompt, context)
+            .then(aiResult => {
+              window.postMessage({ ns: 'stanley-web', cmd: 'ai_prompt_response', reqId, result: aiResult }, '*');
+            })
+            .catch(err => {
+              window.postMessage({ ns: 'stanley-web', cmd: 'ai_prompt_response', reqId, result: `AI Error: ${err.message}` }, '*');
+            });
+        } else if (action === 'native_log') {
           setActiveRun(prev => {
             if (!prev) return null;
             const updatedLogs = [...(prev.logs || []), log];
@@ -853,7 +898,7 @@ export function CockpitInner() {
       if (!Array.isArray(actions) || actions.length === 0) {
         throw new Error('AI did not return a valid list of workflow actions.');
       }
-      const mapped = mapActionsToGraph(actions);
+      const mapped = mapActionsToGraph(actions, prompt);
       const newWfName = `AI: ${prompt.length > 30 ? prompt.substring(0, 27) + '...' : prompt}`;
       const newWf: Workflow = {
         id: Math.random().toString(36).substring(2, 9),
@@ -2486,11 +2531,31 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
             </div>
             
             <div className="log-output-box">
-              {activeRun.logs && activeRun.logs.map((log, index) => (
-                <div key={index} className="log-line">
-                  {log}
-                </div>
-              ))}
+              {activeRun.logs && activeRun.logs.map((log, index) => {
+                if (log.startsWith('[Result]')) {
+                  return (
+                    <div key={index} className="log-line" style={{ 
+                      marginTop: '1rem', 
+                      padding: '1rem', 
+                      background: 'rgba(59, 130, 246, 0.1)', 
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      borderRadius: '8px',
+                      color: 'var(--text-light)',
+                      fontWeight: 500
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#60a5fa', fontWeight: 600 }}>
+                        <Sparkles size={16} /> AI Output Result
+                      </div>
+                      {log.replace('[Result] ', '')}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={index} className="log-line">
+                    {log}
+                  </div>
+                );
+              })}
               {pollingLogs && (
                 <div className="log-line active-polling">
                   <Loader className="spinner inline"/> Running...

@@ -195,6 +195,17 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label }
       break;
     }
 
+    case 'ai_prompt': {
+      onLog(`${label} Requesting AI Analysis...`);
+      if (ctx.runAiPrompt) {
+        const result = await ctx.runAiPrompt(data.prompt, JSON.stringify(ctx.scrapedData));
+        onLog(`[Result] ${result}`);
+      } else {
+        onLog(`[Result] Error: AI engine not wired up for this environment.`);
+      }
+      break;
+    }
+
     default:
       onLog(`${label} Unknown node type "${node.type}" — skipped.`);
   }

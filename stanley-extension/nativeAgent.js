@@ -65,8 +65,7 @@ export class StanleyNativeAgent {
 
   async initialize() {
     if (this.activeTabId == null) {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab) throw new Error('No active tab to drive.');
+      const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
       this.activeTabId = tab.id;
     }
     const id = `tab-${this.tabCounter++}`;

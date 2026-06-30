@@ -62,6 +62,24 @@ async function runNativeWorkflow(workflow, secrets, opts = {}) {
     const scraped = await executeGraph(agent, workflow, {
       onLog: pushLog,
       secrets: secrets || {},
+      runAiPrompt: (prompt, context) => {
+        return new Promise((resolve) => {
+          if (!currentEditorTabId) return resolve('Error: Editor tab disconnected.');
+          const reqId = Math.random().toString();
+          const listener = (msg) => {
+            if (msg.action === 'ai_prompt_response' && msg.reqId === reqId) {
+              chrome.runtime.onMessage.removeListener(listener);
+              resolve(msg.result);
+            }
+          };
+          chrome.runtime.onMessage.addListener(listener);
+          chrome.tabs.sendMessage(currentEditorTabId, {
+            ns: 'stanley-extension-event',
+            action: 'run_ai_prompt',
+            reqId, prompt, context
+          }).catch(() => resolve('Error: Failed to reach dashboard for AI execution.'));
+        });
+      },
       onBlocked: async (block, label) => {
         pushLog(`${label} ${block.hint} — waiting for you to resolve it…`);
         chrome.runtime.sendMessage({ action: 'pause_request', hint: block.hint }).catch(() => {});

@@ -284,6 +284,12 @@
           workflow: event.data.workflow,
           secrets: event.data.secrets
         });
+      } else if (cmd === 'ai_prompt_response') {
+        chrome.runtime.sendMessage({
+          action: 'ai_prompt_response',
+          reqId: event.data.reqId,
+          result: event.data.result
+        });
       } else if (cmd === 'cancel_native') {
         chrome.runtime.sendMessage({ action: 'cancel_native' });
       } else if (cmd === 'get_native_status') {
