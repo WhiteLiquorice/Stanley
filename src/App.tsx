@@ -4,6 +4,8 @@ import { Layout } from './components/Layout';
 import { Cockpit } from './views/Cockpit';
 import { Vault } from './views/Vault';
 import { Editor } from './views/Editor';
+import { Results } from './views/Results';
+import { Guide } from './views/Guide';
 import { Landing } from './views/Landing';
 import { isLoggedIn, getFreshIdToken, signOut } from './lib/firebaseAuth';
 import { CreditCard } from 'lucide-react';
@@ -44,6 +46,8 @@ function App() {
       <Route path="/dashboard" element={<ProtectedRoute><Layout><Cockpit /></Layout></ProtectedRoute>} />
       <Route path="/dashboard/vault" element={<ProtectedRoute><Layout><Vault /></Layout></ProtectedRoute>} />
       <Route path="/dashboard/editor" element={<ProtectedRoute><Layout><Editor /></Layout></ProtectedRoute>} />
+      <Route path="/dashboard/results" element={<ProtectedRoute><Layout><Results /></Layout></ProtectedRoute>} />
+      <Route path="/dashboard/guide" element={<ProtectedRoute><Layout><Guide /></Layout></ProtectedRoute>} />
       <Route path="/dashboard/settings" element={
         <ProtectedRoute>
           <Layout>

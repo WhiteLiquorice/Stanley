@@ -1616,7 +1616,7 @@ export function CockpitInner() {
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((r) => (
+                  {runs.slice(0, 10).map((r) => (
                     <tr key={r.id}>
                       <td className="font-medium">{r.workflowName}</td>
                       <td>
