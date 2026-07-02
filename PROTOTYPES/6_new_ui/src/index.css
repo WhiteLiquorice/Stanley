@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* Base styles and scrollbar overrides */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #0b0f19;
+  color: #f3f4f6;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* React Flow custom styled handles and grids */
+.react-flow__handle {
+  background: #6366f1 !important;
+  width: 8px !important;
+  height: 8px !important;
+  border: 2px solid #0f172a !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 2.5;
+  stroke: #4f46e5;
+  transition: stroke 0.3s ease;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #818cf8;
+}
+
+.react-flow__controls {
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+}
+
+.react-flow__controls-button {
+  background: transparent !important;
+  border-bottom: 1px solid #334155 !important;
+  color: #94a3b8 !important;
+  fill: #94a3b8 !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #334155 !important;
+  color: #f1f5f9 !important;
+  fill: #f1f5f9 !important;
+}
+
+/* Make.com style glowing connection animation */
+@keyframes flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.edge-glowing {
+  stroke-dasharray: 6;
+  animation: flow 1s linear infinite;
+  stroke: #818cf8 !important;
+}
