@@ -7,6 +7,7 @@ import { Editor } from './views/Editor';
 import { Results } from './views/Results';
 import { Guide } from './views/Guide';
 import { Landing } from './views/Landing';
+import { AdStaging } from './views/AdStaging';
 import { isLoggedIn, getFreshIdToken, signOut } from './lib/firebaseAuth';
 import { CreditCard } from 'lucide-react';
 
@@ -41,6 +42,7 @@ function App() {
     <Routes>
       {/* Public Marketing Route */}
       <Route path="/" element={<Landing />} />
+      <Route path="/ad-staging" element={<AdStaging />} />
       
       {/* Dashboard Routes wrapped in Layout */}
       <Route path="/dashboard" element={<ProtectedRoute><Layout><Cockpit /></Layout></ProtectedRoute>} />
