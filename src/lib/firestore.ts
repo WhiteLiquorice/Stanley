@@ -81,6 +81,22 @@ function docToObj(doc: Record<string, unknown>): Record<string, unknown> {
 
 // ── Path helpers ───────────────────────────────────────────────────────────────
 
+function isLocalMock(): boolean {
+  const token = localStorage.getItem('stanley_id_token') || '';
+  return token.startsWith('local-mock-') || token.startsWith('mock-');
+}
+
+function getLocalCollection(sub: string): Record<string, unknown>[] {
+  const key = `stanley_local_db_${sub}`;
+  const data = localStorage.getItem(key);
+  return data ? JSON.parse(data) : [];
+}
+
+function setLocalCollection(sub: string, docs: Record<string, unknown>[]): void {
+  const key = `stanley_local_db_${sub}`;
+  localStorage.setItem(key, JSON.stringify(docs));
+}
+
 function collPath(sub: string): string {
   return `${BASE}/stanley_users/${getUid()}/${sub}`;
 }
@@ -93,6 +109,9 @@ function docPath(sub: string, id: string): string {
 
 /** List all documents in a user subcollection. */
 export async function listDocs(sub: string): Promise<Record<string, unknown>[]> {
+  if (isLocalMock()) {
+    return getLocalCollection(sub);
+  }
   const headers = await authHeaders();
   const res = await fetch(collPath(sub), { headers });
   if (!res.ok) throw new Error(`Firestore list ${sub} failed: ${res.status}`);
@@ -109,6 +128,18 @@ export async function setDoc(
   id: string,
   data: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  if (isLocalMock()) {
+    const docs = getLocalCollection(sub);
+    const doc = { id, ...data };
+    const index = docs.findIndex(d => d.id === id);
+    if (index >= 0) {
+      docs[index] = doc;
+    } else {
+      docs.push(doc);
+    }
+    setLocalCollection(sub, docs);
+    return doc;
+  }
   const { id: _omit, ...fields } = data;
   const headers = await authHeaders();
   const res = await fetch(docPath(sub, id), {
@@ -122,6 +153,12 @@ export async function setDoc(
 
 /** Delete a document. */
 export async function deleteDoc(sub: string, id: string): Promise<void> {
+  if (isLocalMock()) {
+    const docs = getLocalCollection(sub);
+    const filtered = docs.filter(d => d.id !== id);
+    setLocalCollection(sub, filtered);
+    return;
+  }
   const headers = await authHeaders();
   const res = await fetch(docPath(sub, id), { method: 'DELETE', headers });
   if (!res.ok) throw new Error(`Firestore delete ${sub}/${id} failed: ${res.status}`);

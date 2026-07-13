@@ -10,12 +10,16 @@ const { generatePythonApi } = require('./apiResolver.js');
 
 const MAX_STEPS_DEFAULT = 500;
 
-async function evaluateCondition(condition, ctx) {
+async function evaluateCondition(condition, ctx, scraped = {}) {
   if (condition === undefined || condition === null) return true;
 
   const type = typeof condition === 'string' ? condition : condition.type;
   const value = typeof condition === 'string' ? undefined : condition.value;
-  const hay = (ctx.lastScrape || '').toLowerCase();
+  
+  let hay = (ctx.lastScrape || '').toLowerCase();
+  if (condition.variable && typeof condition.variable === 'string') {
+    hay = interpolate(condition.variable, ctx, scraped).toLowerCase();
+  }
   const needle = String(value == null ? '' : value).toLowerCase();
 
   switch (type) {
@@ -26,6 +30,8 @@ async function evaluateCondition(condition, ctx) {
     case 'false':      return ctx.lastConditionResult === false;
     case 'contains':   return hay.includes(needle);
     case 'notContains':return !hay.includes(needle);
+    case 'equals':     return hay === needle;
+    case 'notEquals':  return hay !== needle;
     case 'exists':
       return ctx.agent && ctx.agent.elementExists ? await ctx.agent.elementExists(value) : false;
     case 'notExists':
@@ -40,7 +46,7 @@ function isFailureCondition(condition) {
   return type === 'onFailure';
 }
 
-async function pickNextEdge(outgoingEdges, ctx) {
+async function pickNextEdge(outgoingEdges, ctx, scraped = {}) {
   if (!outgoingEdges || outgoingEdges.length === 0) return null;
 
   if (ctx.lastError) {
@@ -52,7 +58,7 @@ async function pickNextEdge(outgoingEdges, ctx) {
 
   for (const edge of outgoingEdges) {
     if (isFailureCondition(edge.condition)) continue;
-    if (await evaluateCondition(edge.condition, ctx)) return edge;
+    if (await evaluateCondition(edge.condition, ctx, scraped)) return edge;
   }
   return null;
 }
@@ -101,7 +107,7 @@ async function executeGraph(agent, workflow, opts = {}) {
   if (!current) throw new Error('Workflow has no nodes to execute.');
 
   const scraped = {};
-  const ctx = { agent, lastError: null, lastScrape: '', lastConditionResult: null, missionPrompt, stepParams: {}, input, onSelfHealed: opts.onSelfHealed };
+  const ctx = { agent, lastError: null, lastScrape: '', lastConditionResult: null, missionPrompt, stepParams: {}, input, onSelfHealed: opts.onSelfHealed, data: {} };
   let steps = 0;
 
   while (current) {
@@ -155,9 +161,31 @@ async function executeGraph(agent, workflow, opts = {}) {
 
     if (!usedCachedApi) {
       try {
-        await runGraphNode(agent, effectiveNode, { onLog, secrets, scraped, ctx, label, visionResolver });
+        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent'];
+        if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type)) {
+          await opts.ensureBrowser();
+        }
+
+        const retryableNodes = ['click', 'type', 'navigate', 'scrape', 'extract', 'extract_list'];
+        const maxRetries = retryableNodes.includes(effectiveNode.type) ? 3 : 1;
+        let lastErr;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            await runGraphNode(agent, effectiveNode, { onLog, secrets, scraped, ctx, label, visionResolver });
+            lastErr = null;
+            break;
+          } catch (attemptErr) {
+            lastErr = attemptErr;
+            if (attempt < maxRetries) {
+              const delayMs = 1000 * Math.pow(2, attempt - 1);
+              onLog(`${label} [Retry ${attempt}/${maxRetries}] Failed: "${attemptErr.message}". Retrying after ${delayMs}ms…`);
+              await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
       } catch (err) {
-        // Step failed! Let's become agentic upon failure!
+        // Step failed after all retries! Let's become agentic upon failure!
         onLog(`${label} failed: "${err.message}". Initiating Agentic Recovery...`);
         
         // 2. Python API Generation Fallback
@@ -238,7 +266,7 @@ async function executeGraph(agent, workflow, opts = {}) {
 
     // Context edges attach parameters; they are not part of execution flow.
     const outgoing = (workflow.edges || []).filter(e => e.source === current.id && e.kind !== 'context');
-    const next = await pickNextEdge(outgoing, ctx);
+    const next = await pickNextEdge(outgoing, ctx, scraped);
 
     if (!next) {
       if (ctx.lastError) throw ctx.lastError;
@@ -357,6 +385,70 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
     case 'mission':
     case 'parameter':
       break;
+
+    case 'router':
+      // The router node acts as a pass-through.
+      // The routing logic is handled by evaluateCondition checking the branch edges.
+      onLog(`${label} Evaluating router branches...`);
+      break;
+
+    case 'integration': {
+      const integrationType = data.integrationType;
+      onLog(`${label} Executing native integration: ${integrationType}`);
+      
+      let res;
+      if (integrationType === 'google_sheets_append') {
+        const sheetId = data.sheet_id;
+        const token = data.token || secrets[data.vault_key] || '';
+        const rowData = data.data || {};
+        
+        const fetchRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/A1:append?valueInputOption=USER_ENTERED`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ values: [Object.values(rowData)] })
+        });
+        res = await fetchRes.json();
+      } else if (integrationType === 'notion_create_page') {
+        const dbId = data.database_id;
+        const token = data.token || secrets[data.vault_key] || '';
+        const pageData = data.data || {};
+        
+        const fetchRes = await fetch(`https://api.notion.com/v1/pages`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parent: { database_id: dbId },
+            properties: pageData
+          })
+        });
+        res = await fetchRes.json();
+      } else {
+        throw new Error(`Unsupported integration type: ${integrationType}`);
+      }
+      
+      scraped[effectiveNode.id] = res;
+      ctx.lastScrape = JSON.stringify(res);
+      break;
+    }
+
+    case 'ai_agent': {
+      const role = data.role || 'Helpful Assistant';
+      const agentGoal = data.goal || 'Complete the task';
+      onLog(`${label} Spawning Autonomous Agent: [${role}] - "${agentGoal}"`);
+      
+      let agentResult;
+      if (agent.clickByNaturalLocator) {
+        onLog(`${label} Agent is analyzing page state...`);
+        agentResult = await agent.clickByNaturalLocator(agentGoal);
+      } else {
+        onLog(`${label} Agent requires browser context which is unavailable.`);
+        agentResult = { status: 'failed', reason: 'No browser context' };
+      }
+      
+      scraped[effectiveNode.id] = agentResult;
+      ctx.lastScrape = typeof agentResult === 'string' ? agentResult : JSON.stringify(agentResult);
+      break;
+    }
 
     case 'extract': {
       const selector = data.selector;
@@ -516,6 +608,40 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       break;
     }
 
+    case 'vision': {
+      if (!visionResolver || typeof visionResolver.visionAnalysis !== 'function') {
+        throw new Error('Vision resolver not configured for this run.');
+      }
+      onLog(`${label} Passing screenshot to Vision AI for analysis...`);
+      const screenshot = await agent.captureScreenshotBase64();
+      const prompt = interpolate(data.prompt || '', ctx, scraped);
+      const response = await visionResolver.visionAnalysis(prompt, '', screenshot);
+      scraped[node.id] = response;
+      ctx.lastScrape = response;
+      onLog(`${label} Vision AI replied: ${response.slice(0, 100)}${response.length > 100 ? '...' : ''}`);
+      break;
+    }
+
+    case 'approval': {
+      const contextStr = interpolate(data.context || '', ctx, scraped);
+      const emailTarget = interpolate(data.email || '', ctx, scraped);
+      onLog(`${label} Human-in-the-Loop Checkpoint reached.`);
+      
+      if (opts.db && opts.runId) {
+        onLog(`${label} Pausing execution and notifying ${emailTarget || 'workspace admins'}...`);
+        await opts.db.collection('runs').doc(opts.runId).update({
+          status: 'pending_approval',
+          approvalContext: contextStr,
+          approvalEmail: emailTarget,
+          pendingNodeId: node.id
+        });
+        throw new Error('WORKFLOW_PAUSED_FOR_APPROVAL');
+      } else {
+        onLog(`${label} Warning: No DB context provided. Bypassing approval in local mode.`);
+      }
+      break;
+    }
+
     case 'integration': {
       const integrationName = data.integrationName;
       if (!integrationName) throw new Error('Integration node missing integrationName');
@@ -553,6 +679,149 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       break;
     }
 
+    case 'http_request': {
+      const method = (data.method || 'GET').toUpperCase();
+      let url = data.url;
+      if (!url) throw new Error('http_request node missing URL');
+      let headers = {};
+      if (data.headers) {
+        try { headers = typeof data.headers === 'string' ? JSON.parse(data.headers) : data.headers; } catch { headers = {}; }
+        for (const [k, v] of Object.entries(headers)) {
+          if (typeof v === 'string' && v.startsWith('vault:')) {
+            headers[k] = secrets[v.slice('vault:'.length)] || v;
+          }
+        }
+      }
+      let body = undefined;
+      if (['POST', 'PUT', 'PATCH'].includes(method) && data.body) {
+        body = typeof data.body === 'string' ? data.body : JSON.stringify(data.body);
+        if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/json';
+      }
+      onLog(`${label} HTTP ${method} ${url}`);
+      const httpRes = await fetch(url, { method, headers, body });
+      const contentType = httpRes.headers.get('content-type') || '';
+      const httpResult = contentType.includes('json') ? await httpRes.json() : await httpRes.text();
+      scraped[node.id] = httpResult;
+      ctx.lastScrape = typeof httpResult === 'object' ? JSON.stringify(httpResult) : String(httpResult);
+      onLog(`${label} HTTP ${httpRes.status}`);
+      break;
+    }
+
+    case 'loop': {
+      const sourceId = data.sourceNodeId;
+      const maxItems = parseInt(data.maxItems || '50', 10);
+      if (!sourceId) throw new Error('Loop node missing sourceNodeId');
+      const items = Array.isArray(scraped[sourceId]) ? scraped[sourceId] : [];
+      const loopLimit = Math.min(items.length, maxItems);
+      onLog(`${label} Looping over ${items.length} items (max ${maxItems})`);
+      const loopResults = [];
+      for (let i = 0; i < loopLimit; i++) {
+        ctx.loopItem = items[i];
+        ctx.loopIndex = i;
+        onLog(`${label} Loop iteration ${i + 1}/${loopLimit}`);
+        const loopEdges = (workflow.edges || []).filter(e => e.source === node.id && e.kind !== 'context' && e.loopBody);
+        for (const le of loopEdges) {
+          const childNode = nodesById[le.target];
+          if (childNode) {
+            const childData = interpolateFields(childNode.data || {}, ctx, scraped);
+            try {
+              await runGraphNode(agent, { ...childNode, data: childData }, { onLog, secrets, scraped, ctx, label: `${label} [${i+1}]`, visionResolver });
+            } catch (err) { onLog(`${label} Loop item ${i+1} failed: ${err.message}`); }
+          }
+        }
+        loopResults.push({ index: i, item: items[i] });
+      }
+      delete ctx.loopItem;
+      delete ctx.loopIndex;
+      scraped[node.id] = loopResults;
+      ctx.lastScrape = JSON.stringify(loopResults);
+      onLog(`${label} Loop completed. ${loopLimit} iterations.`);
+      break;
+    }
+
+    case 'transform': {
+      const op = data.operation || 'trim';
+      let input = data.input || ctx.lastScrape || '';
+      if (typeof input === 'string' && input.startsWith('{{') && input.endsWith('}}')) {
+        const ref = input.slice(2, -2).trim();
+        if (scraped[ref] != null) input = scraped[ref];
+        else if (ref === 'lastScrape') input = ctx.lastScrape;
+      }
+      const param = data.param || '';
+      let result;
+      switch (op) {
+        case 'extract_regex': result = String(input).match(new RegExp(param, 'gi')) || []; break;
+        case 'replace': result = String(input).replace(new RegExp(data.find || '', 'g'), data.replaceWith || ''); break;
+        case 'json_parse': try { result = JSON.parse(String(input)); } catch { result = input; } break;
+        case 'filter_array': result = Array.isArray(input) ? input.filter(item => (typeof item === 'object' ? JSON.stringify(item) : String(item)).toLowerCase().includes(param.toLowerCase())) : input; break;
+        case 'sort_array': result = Array.isArray(input) ? [...input].sort((a, b) => String(param && typeof a === 'object' ? a[param] : a).localeCompare(String(param && typeof b === 'object' ? b[param] : b))) : input; break;
+        case 'to_upper': result = String(input).toUpperCase(); break;
+        case 'to_lower': result = String(input).toLowerCase(); break;
+        case 'trim': result = String(input).trim(); break;
+        case 'count': result = Array.isArray(input) ? input.length : String(input).length; break;
+        case 'first_item': result = Array.isArray(input) ? input[0] : input; break;
+        case 'last_item': result = Array.isArray(input) ? input[input.length - 1] : input; break;
+        case 'format_date': try { result = new Date(String(input)).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }); } catch { result = String(input); } break;
+        default: result = input;
+      }
+      scraped[node.id] = result;
+      ctx.lastScrape = typeof result === 'object' ? JSON.stringify(result) : String(result);
+      onLog(`${label} Transform (${op})`);
+      break;
+    }
+
+    case 'send_slack': {
+      const webhookUrl = data.webhookUrl || (data.webhook && data.webhook.startsWith('vault:') ? secrets[data.webhook.slice('vault:'.length)] : data.webhook);
+      if (!webhookUrl) throw new Error('send_slack node missing webhookUrl');
+      const message = data.message || ctx.lastScrape || 'Stanley notification';
+      onLog(`${label} Sending Slack message…`);
+      const slackRes = await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }) });
+      scraped[node.id] = { status: slackRes.status, ok: slackRes.ok };
+      onLog(`${label} Slack ${slackRes.ok ? 'sent' : 'failed (' + slackRes.status + ')'}`);
+      break;
+    }
+
+    case 'send_email': {
+      const to = data.to;
+      const subject = data.subject || 'Stanley Notification';
+      const emailBody = data.body || ctx.lastScrape || '';
+      if (!to) throw new Error('send_email node missing "to" address');
+      const emailEndpoint = data.functionUrl || 'https://us-central1-bridgeway-db29e.cloudfunctions.net/stanleySendEmail';
+      onLog(`${label} Sending email to ${to}…`);
+      try {
+        const emailRes = await fetch(emailEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to, subject, body: emailBody }) });
+        scraped[node.id] = await emailRes.json().catch(() => ({ status: emailRes.status }));
+        onLog(`${label} Email ${emailRes.ok ? 'sent' : 'failed (' + emailRes.status + ')'}`);
+      } catch (err) { onLog(`${label} Email error: ${err.message}`); scraped[node.id] = { error: err.message }; }
+      break;
+    }
+
+    case 'monitor': {
+      const crypto = require('crypto');
+      const content = await agent.scrapeContent(data.selector);
+      const hash = crypto.createHash('sha256').update(content).digest('hex');
+      // For cloud runs, store state in Firestore if db is available, otherwise in-memory
+      let prevHash;
+      if (opts.db) {
+        try {
+          const stateDoc = await opts.db.collection('monitor_state').doc(node.id).get();
+          prevHash = stateDoc.exists ? stateDoc.data().hash : undefined;
+          await opts.db.collection('monitor_state').doc(node.id).set({ hash, updatedAt: new Date() });
+        } catch { /* first run or db error */ }
+      }
+      const changed = prevHash !== undefined && prevHash !== hash;
+      ctx.lastConditionResult = changed;
+      scraped[node.id] = { changed, hash, previousHash: prevHash || null, contentLength: content.length };
+      if (prevHash === undefined) {
+        onLog(`${label} Monitor baseline captured. Hash: ${hash.slice(0, 12)}…`);
+      } else if (changed) {
+        onLog(`${label} ⚡ Change detected!`);
+      } else {
+        onLog(`${label} No change detected.`);
+      }
+      break;
+    }
+
     default:
       onLog(`${label} Unknown node type "${node.type}" — skipped.`);
   }
@@ -572,6 +841,70 @@ function cleanDescription(desc) {
              .trim();
 }
 
+async function retryWithBackoff(fn, onLog, maxRetries = 3, baseDelayMs = 2000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isRateLimit = /429|quota|rate limit|too many requests/i.test(err.message);
+      if (isRateLimit && i < maxRetries - 1) {
+        const delay = baseDelayMs * Math.pow(2, i);
+        onLog(`   [Rate Limit] Hit 429. Auto-pausing execution. Cooling down for ${delay / 1000}s before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function resolveSelectorFallback(agent, failedSelector, description, onLog, visionResolver) {
+  if (!visionResolver || typeof visionResolver.generateText !== 'function') return null;
+  
+  onLog(`   [Self-Healing] Intercepting DOM snapshot for failed selector: "${failedSelector}"`);
+  try {
+    const elementsSnapshot = await agent.page.evaluate(() => {
+      const elms = [];
+      const tags = ['button', 'input', 'a', 'textarea', 'select', '[role="button"]'];
+      document.querySelectorAll(tags.join(',')).forEach((el, idx) => {
+        if (elms.length > 80) return;
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          elms.push({
+            index: idx,
+            tag: el.tagName.toLowerCase(),
+            text: (el.textContent || el.value || '').trim().slice(0, 40),
+            placeholder: el.getAttribute('placeholder') || '',
+            id: el.id || '',
+            class: el.className || '',
+            ariaLabel: el.getAttribute('aria-label') || ''
+          });
+        }
+      });
+      return JSON.stringify(elms);
+    });
+
+    const prompt = `The browser automation failed to interact with selector "${failedSelector}".
+Target Element Description: "${description || 'the interactive element'}"
+Here is a list of interactive elements currently on the page:
+${elementsSnapshot}
+
+Identify the correct element from the list that matches the user's intent. Return only the index of the element as a plain number (e.g. 5). If no match is found, return -1.`;
+
+    const system = `You are a self-healing browser automation assistant. Return a plain number only.`;
+    const reply = await retryWithBackoff(() => visionResolver.generateText(prompt, system), onLog);
+    const matchedIndex = parseInt(reply.trim().match(/-?\d+/)?.[0] || '-1', 10);
+    
+    if (matchedIndex !== -1) {
+      onLog(`   [Self-Healing] Resolved alternative element index: ${matchedIndex}`);
+      return `index_${matchedIndex}`;
+    }
+  } catch (err) {
+    onLog(`   [Self-Healing] Fallback resolver failed: ${err.message}`);
+  }
+  return null;
+}
+
 async function smartClick(agent, data, onLog, visionResolver) {
   if (data.selector) {
     try {
@@ -579,12 +912,22 @@ async function smartClick(agent, data, onLog, visionResolver) {
       await agent.click(data.selector);
       return null;
     } catch (e) {
-      if (!data.description) throw e;
+      // Try self healing first
+      const healedSelector = await resolveSelectorFallback(agent, data.selector, data.intentFallback || data.description, onLog, visionResolver);
+      if (healedSelector) {
+        const index = parseInt(healedSelector.replace('index_', ''), 10);
+        if (!isNaN(index)) {
+          await agent.clickByIndex(index);
+          return healedSelector;
+        }
+      }
+      if (!data.description && !data.intentFallback) throw e;
       onLog(`   ↳ CSS selector failed; escalating to intent matching.`);
     }
   }
-  if (data.description) {
-    const cleanDesc = cleanDescription(data.description);
+  const desc = data.intentFallback || data.description;
+  if (desc) {
+    const cleanDesc = cleanDescription(desc);
     const res = await agent.clickByNaturalLocator(cleanDesc);
     if (res) {
       return typeof res === 'object' ? res.resolvedSelector : null;
@@ -593,12 +936,12 @@ async function smartClick(agent, data, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.clickByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext);
+      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.clickByStrategy(loc.strategy, loc.value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;
     }
-    throw new Error(`Could not locate clickable element: "${data.description}"`);
+    throw new Error(`Could not locate clickable element: "${desc}"`);
   }
   throw new Error('Click node missing selector/description');
 }
@@ -610,12 +953,22 @@ async function smartType(agent, data, value, onLog, visionResolver) {
       await agent.type(data.selector, value);
       return null;
     } catch (e) {
-      if (!data.description) throw e;
+      // Try self healing first
+      const healedSelector = await resolveSelectorFallback(agent, data.selector, data.intentFallback || data.description, onLog, visionResolver);
+      if (healedSelector) {
+        const index = parseInt(healedSelector.replace('index_', ''), 10);
+        if (!isNaN(index)) {
+          await agent.typeByIndex(index, value);
+          return healedSelector;
+        }
+      }
+      if (!data.description && !data.intentFallback) throw e;
       onLog(`   ↳ CSS selector failed; escalating to intent matching.`);
     }
   }
-  if (data.description) {
-    const cleanDesc = cleanDescription(data.description);
+  const desc = data.intentFallback || data.description;
+  if (desc) {
+    const cleanDesc = cleanDescription(desc);
     const res = await agent.typeByNaturalLocator(cleanDesc, value);
     if (res) {
       return typeof res === 'object' ? res.resolvedSelector : null;
@@ -624,12 +977,12 @@ async function smartType(agent, data, value, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.typeByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext);
+      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.typeByStrategy(loc.strategy, loc.value, value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;
     }
-    throw new Error(`Could not locate input: "${data.description}"`);
+    throw new Error(`Could not locate input: "${desc}"`);
   }
   throw new Error('Type node missing selector/description');
 }
@@ -655,8 +1008,18 @@ function interpolate(tpl, ctx, scraped) {
   return String(tpl)
     .replace(/\{\{\s*lastScrape\s*\}\}/g, ctx.lastScrape || '')
     .replace(/\{\{\s*lastAiResult\s*\}\}/g, ctx.lastAiResult || '')
+    .replace(/\{\{\s*loopIndex\s*\}\}/g, ctx.loopIndex != null ? String(ctx.loopIndex) : '')
+    .replace(/\{\{\s*loop\.(\w+)\s*\}\}/g, (_m, field) => {
+      if (ctx.loopItem == null) return '';
+      const v = ctx.loopItem[field];
+      return v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    })
     .replace(/\{\{\s*(?:input|trigger)\.([\w.]+)\s*\}\}/g, (_m, path) => {
       const v = getPath(ctx.input, path);
+      return v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+    })
+    .replace(/\{\{\s*(?:context|data)\.([\w.]+)\s*\}\}/g, (_m, path) => {
+      const v = getPath(ctx.data, path);
       return v == null ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
     })
     .replace(/\{\{\s*(\w+)\s*\}\}/g, (m, id) => (scraped[id] != null ? String(scraped[id]) : m));

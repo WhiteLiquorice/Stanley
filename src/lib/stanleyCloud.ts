@@ -15,6 +15,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAI, getGenerativeModel, VertexAIBackend } from 'firebase/ai';
 import { listDocs } from './firestore';
+import { getPromptIntegrationList } from './integrationsCatalog';
 
 const firebaseConfig = {
   projectId: "bridgeway-db29e",
@@ -128,6 +129,8 @@ Supported Node Types:
 - 'js_code': Execute custom javascript, takes "code" in data.
 - 'mission': SUPER NODE — the overall goal for the whole run. Takes "prompt" in data. It is NOT part of the execution flow; connect it to any node with a CONTEXT edge ("kind": "context"). The runner feeds it to the AI on every step so the automation understands the intent, not just the mechanics. There should be at most one.
 - 'parameter': SUB NODE — supplies parameters to the single step it is wired to. Takes arbitrary keys in data; "value" sets what gets typed/used (supports "vault:SecretName"), and any other keys (e.g. "account": "Business") become extra AI context. Connect it to its target node with a CONTEXT edge ("kind": "context"). Use this to pick a specific account/login so the AI never has to guess which one.
+- 'integration': Call a 3rd party API natively. Supported "integrationName" values:
+  ${getPromptIntegrationList()}
 
 Supported Actions in your response:
 1. {"type": "add_node", "node": { "id": "unique_string", "type": "node_type", "label": "Label", "data": { ... }, "position": { "x": number, "y": number } }}
@@ -140,6 +143,7 @@ Supported Actions in your response:
 Rules:
 - Keep the graph clean. When adding nodes, space them 140px down the y-axis.
 - Connect nodes using "add_edge" so the workflow has a logical flow.
+- CRITICAL RULE: Every single generated or updated workflow MUST contain exactly one 'mission' node (containing the overall goal of the workflow in data.prompt). If a mission node does not exist, add it and connect it to the starting node (usually the trigger node) with a context edge ("kind": "context").
 - If the user asks a general question, explain in "message" and leave "actions" empty.
 - Always output valid, parseable JSON with no markdown formatting.`;
 
@@ -163,14 +167,20 @@ export async function compilePrompt(prompt: string): Promise<unknown[]> {
   const vertex = getVertexInstance();
   const model = getGenerativeModel(vertex, { 
     model: "gemini-2.5-flash",
-    systemInstruction: COMPILE_SYSTEM
+    systemInstruction: COMPILE_SYSTEM,
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+    ]
   });
 
   const response = await model.generateContent({
     contents: [{ role: 'user', parts: [{ text: `Translate this user prompt into a structured workflow:\n"${prompt}"` }] }],
     generationConfig: {
       responseMimeType: "application/json",
-      temperature: 0.1
+      temperature: 0.0
     }
   });
 
@@ -197,7 +207,13 @@ export async function chatCopilot(
   const vertex = getVertexInstance();
   const model = getGenerativeModel(vertex, { 
     model: "gemini-2.5-flash",
-    systemInstruction: CHAT_SYSTEM
+    systemInstruction: CHAT_SYSTEM,
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+    ]
   });
 
   const contents: any[] = [];
@@ -252,5 +268,172 @@ export async function runAiAnalysis(prompt: string, context: string = ''): Promi
   });
 
   return response.response.text();
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: string;
+  label: string;
+  data: Record<string, any>;
+  position: { x: number; y: number };
+}
+
+export interface WorkflowEdge {
+  source: string;
+  target: string;
+  kind?: string;
+}
+
+export interface CompiledWorkflow {
+  name: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}
+
+export function getExecutionTier(nodeType: string): 'local' | 'browser' | 'agent' {
+  switch (nodeType) {
+    case 'js_code':
+    case 'wait':
+    case 'parameter':
+    case 'mission':
+    case 'label':
+    case 'goto':
+    case 'integration':
+    case 'webhook_trigger':
+    case 'schedule_trigger':
+      return 'local';
+    case 'trigger':
+    case 'navigate':
+    case 'click':
+    case 'type':
+    case 'scrape':
+    case 'open_tab':
+    case 'switch_tab':
+    case 'close_tab':
+    case 'if':
+      return 'browser';
+    case 'ai_prompt':
+    case 'vision':
+    case 'approval':
+    case 'ai_agent':
+      return 'agent';
+    default:
+      return 'browser';
+  }
+}
+
+export async function compileWorkflow(prompt: string): Promise<CompiledWorkflow> {
+  const lmKey = await getLmStudioKey();
+  const systemPrompt = `You are the brain of Project Stanley, a local browser automation butler.
+Your task is to take a natural language request from a user and translate it into a structured, step-by-step automation workflow containing nodes and edges.
+
+Available node types:
+1. trigger: The start node. Data: { "url": "URL string" }
+2. navigate: Navigate to a URL. Data: { "url": "URL string" }
+3. click: Click an element. Data: { "description": "Element description", "selector": "CSS selector if known" }
+4. type: Type text into an input. Data: { "description": "Input description", "value": "value to type" }
+5. wait: Delay timer. Data: { "ms": "milliseconds as string" }
+6. scrape: Scrape visible text. Data: { "selector": "CSS selector to scope" }
+7. open_tab: Open new tab. Data: { "url": "Optional URL" }
+8. switch_tab: Switch to a tab. Data: { "index": "tab index as string" }
+9. close_tab: Close a tab. Data: { "index": "tab index as string" }
+10. if: Condition fork. Data: { "condition": { "type": "contains|equals|exists", "value": "check value", "variable": "check variable" } }
+11. js_code: Execute custom JS. Data: { "code": "JS code block" }
+12. ai_prompt: Run AI Gemini prompt. Data: { "prompt": "AI prompt text" }
+13. mission: Super-node storing the overall request goal. Connect to start node with context edge. Data: { "prompt": "User's goal" }
+14. parameter: Sub-node storing parameter inputs. Connect to target step with context edge. Data: { "value": "parameter value" }
+15. integration: Call a 3rd party API natively. Supported "integrationName" values:
+  ${getPromptIntegrationList()}
+16. ai_agent: Autonomous AI Agent. Data: { "role": "Agent role", "goal": "Agent goal" }
+
+CRITICAL RULE: Every single generated workflow MUST contain exactly one 'mission' node that describes the user's overall goal. Connect this mission node to the starting trigger node using a context edge (set "kind": "context" in the edge definition).
+
+Return the final compiled workflow graph matching the requested schema.`;
+
+  const vertexSchema = {
+    type: "OBJECT",
+    properties: {
+      name: { type: "STRING", description: "A creative, short name for the automation (e.g. 'Gmail Lead Extractor')" },
+      nodes: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            id: { type: "STRING" },
+            type: { 
+              type: "STRING"
+            },
+            label: { type: "STRING" },
+            data: {
+              type: "OBJECT",
+              properties: {
+                url: { type: "STRING" },
+                selector: { type: "STRING" },
+                value: { type: "STRING" },
+                ms: { type: "STRING" },
+                label: { type: "STRING" },
+                description: { type: "STRING" },
+                goal: { type: "STRING" },
+                prompt: { type: "STRING" },
+                system: { type: "STRING" },
+                code: { type: "STRING" },
+                integrationName: { type: "STRING" },
+                query: { type: "STRING" },
+                role: { type: "STRING" }
+              }
+            }
+          },
+          required: ["id", "type", "label"]
+        }
+      },
+      edges: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            source: { type: "STRING" },
+            target: { type: "STRING" },
+            kind: { type: "STRING" }
+          },
+          required: ["source", "target"]
+        }
+      }
+    },
+    required: ["name", "nodes", "edges"]
+  };
+
+  if (lmKey) {
+    const text = await callLmStudio(
+      systemPrompt,
+      `Translate this user prompt into a structured workflow matching the schema:\n"${prompt}"`,
+      lmKey
+    );
+    return JSON.parse(cleanJson(text)) as CompiledWorkflow;
+  }
+
+  // Use Firebase AI Logic (Vertex AI client SDK)
+  const vertex = getVertexInstance();
+  const model = getGenerativeModel(vertex, { 
+    model: "gemini-2.5-flash",
+    systemInstruction: systemPrompt,
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+    ]
+  });
+
+  const response = await model.generateContent({
+    contents: [{ role: 'user', parts: [{ text: `Translate this user prompt into a structured workflow:\n"${prompt}"` }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: vertexSchema as any,
+      temperature: 0.0
+    }
+  });
+
+  const text = response.response.text();
+  return JSON.parse(cleanJson(text)) as CompiledWorkflow;
 }
 

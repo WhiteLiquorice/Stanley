@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Shield, Zap, Lock, Terminal, Activity, CheckCircle2, AlertCircle, X, ChevronDown } from 'lucide-react';
-import { signIn, isLoggedIn } from '../lib/firebaseAuth';
+import { signIn, signUp, isLoggedIn } from '../lib/firebaseAuth';
 import './Landing.css';
 
 export function Landing() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [modalMode, setModalMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -33,7 +34,6 @@ export function Landing() {
     e.preventDefault();
     setIsSubmitting(true);
     setLoginError('');
-
     const result = await signIn(email.trim(), password);
     if (result.ok) {
       setShowLoginModal(false);
@@ -45,6 +45,26 @@ export function Landing() {
     setIsSubmitting(false);
   };
 
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setLoginError('');
+    const result = await signUp(email.trim(), password);
+    if (result.ok) {
+      setShowLoginModal(false);
+      setSearchParams({});
+      navigate('/dashboard');
+    } else {
+      setLoginError(result.error || 'Could not create account. Please try again.');
+    }
+    setIsSubmitting(false);
+  };
+
+  const switchMode = (mode: 'signin' | 'signup') => {
+    setModalMode(mode);
+    setLoginError('');
+  };
+
   return (
     <div className="landing-page">
       {/* Glow effects for premium dark theme feel */}
@@ -53,8 +73,8 @@ export function Landing() {
 
       {/* Navbar */}
       <header className="landing-nav animate-fade-in">
-        <div className="logo-area">
-          <div className="logo-box">S</div>
+        <div className="logo-area" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
+          <img src="/favicon.svg" alt="Stanley" style={{ width: '36px', height: '36px', filter: 'drop-shadow(0 2px 8px rgba(168,85,247,0.3))' }} />
           <span className="brand-name">STANLEY</span>
         </div>
         <nav className="nav-links hidden md:flex">
@@ -271,18 +291,18 @@ export function Landing() {
       {showLoginModal && (
         <div className="modal-overlay animate-fade-in">
           <div className="modal-content glass-panel">
-            <button className="modal-close" onClick={() => setShowLoginModal(false)}>
+            <button className="modal-close" onClick={() => { setShowLoginModal(false); setLoginError(''); }}>
               <X size={20} />
             </button>
             <div className="modal-header">
               <div className="modal-icon">
                 <Lock size={24} />
               </div>
-              <h2>Enterprise Access</h2>
-              <p>Sign in to access the Stanley Cockpit.</p>
+              <h2>{modalMode === 'signin' ? 'Welcome Back' : 'Create Account'}</h2>
+              <p>{modalMode === 'signin' ? 'Sign in to access the Stanley Cockpit.' : 'Get 10 free runs, no credit card required.'}</p>
             </div>
             
-            <form onSubmit={handleLoginSubmit} className="login-form">
+            <form onSubmit={modalMode === 'signin' ? handleLoginSubmit : handleSignUpSubmit} className="login-form">
               {loginError && (
                 <div className="login-error">
                   <AlertCircle size={16} />
@@ -302,7 +322,7 @@ export function Landing() {
               </div>
               
               <div className="form-group">
-                <label>Password</label>
+                <label>Password{modalMode === 'signup' && <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}> (min. 6 characters)</span>}</label>
                 <input 
                   type="password" 
                   value={password}
@@ -313,8 +333,36 @@ export function Landing() {
               </div>
               
               <button type="submit" className="btn-launch w-full" disabled={isSubmitting}>
-                {isSubmitting ? 'Authenticating...' : 'Sign In'}
+                {isSubmitting
+                  ? (modalMode === 'signin' ? 'Signing in...' : 'Creating account...')
+                  : (modalMode === 'signin' ? 'Sign In' : 'Create Account')}
               </button>
+
+              <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: 'var(--text-tertiary)' }}>
+                {modalMode === 'signin' ? (
+                  <>
+                    Don't have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={() => switchMode('signup')}
+                      style={{ color: 'var(--accent-blue)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0 }}
+                    >
+                      Create one for free →
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Already have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={() => switchMode('signin')}
+                      style={{ color: 'var(--accent-blue)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0 }}
+                    >
+                      Sign in instead
+                    </button>
+                  </>
+                )}
+              </div>
             </form>
           </div>
         </div>

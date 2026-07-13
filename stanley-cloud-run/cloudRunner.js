@@ -61,72 +61,79 @@ async function runWorkflowHeadless(workflow, secrets = {}, input = {}, db = null
 
   let scraped;
   try {
-    onLog('[Runner] Initializing stealth headless browser…');
-    await agent.initialize();
+    const ensureBrowser = async () => {
+      if (agent.page) return; // already initialized
+      onLog('[Runner] Initializing stealth headless browser (Lazy Boot)…');
+      await agent.initialize();
 
-    // ── Deep stealth init: patch every known automation signal ──────────────
-    // Applied to both the initial page and any new tabs opened during the run.
-    const stealthScript = () => {
-      // 1. webdriver
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-      // 2. Plugins — headless normally has 0; spoof a realistic set
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => {
-          const arr = [{ filename: 'internal-pdf-viewer', name: 'Chrome PDF Plugin', description: 'Portable Document Format' }];
-          arr.__proto__ = PluginArray.prototype;
-          return arr;
-        },
-      });
-
-      // 3. Languages
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-      // 4. chrome runtime object (absent in headless)
-      if (!window.chrome) {
-        window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
-      }
-
-      // 5. Permissions API — headless returns 'denied' for notifications; real Chrome returns 'default'
-      const origQuery = window.navigator.permissions?.query?.bind(navigator.permissions);
-      if (origQuery) {
-        navigator.permissions.query = (parameters) =>
-          parameters.name === 'notifications'
-            ? Promise.resolve({ state: Notification.permission })
-            : origQuery(parameters);
-      }
-
-      // 6. WebGL renderer — mask the SwiftShader/LLVMpipe fingerprint
-      const getParam = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function (parameter) {
-        if (parameter === 37445) return 'Intel Inc.';          // UNMASKED_VENDOR_WEBGL
-        if (parameter === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
-        return getParam.call(this, parameter);
+      // ── Deep stealth init: patch every known automation signal ──────────────
+      const stealthScript = () => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', {
+          get: () => {
+            const arr = [{ filename: 'internal-pdf-viewer', name: 'Chrome PDF Plugin', description: 'Portable Document Format' }];
+            arr.__proto__ = PluginArray.prototype;
+            return arr;
+          },
+        });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        if (!window.chrome) {
+          window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+        }
+        const origQuery = window.navigator.permissions?.query?.bind(navigator.permissions);
+        if (origQuery) {
+          navigator.permissions.query = (parameters) =>
+            parameters.name === 'notifications'
+              ? Promise.resolve({ state: Notification.permission })
+              : origQuery(parameters);
+        }
+        const getParam = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function (parameter) {
+          if (parameter === 37445) return 'Intel Inc.';
+          if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+          return getParam.call(this, parameter);
+        };
+        Object.defineProperty(screen, 'width',  { get: () => 1280 });
+        Object.defineProperty(screen, 'height', { get: () => 800  });
+        Object.defineProperty(screen, 'availWidth',  { get: () => 1280 });
+        Object.defineProperty(screen, 'availHeight', { get: () => 800  });
       };
 
-      // 7. Screen dimensions
-      Object.defineProperty(screen, 'width',  { get: () => 1280 });
-      Object.defineProperty(screen, 'height', { get: () => 800  });
-      Object.defineProperty(screen, 'availWidth',  { get: () => 1280 });
-      Object.defineProperty(screen, 'availHeight', { get: () => 800  });
+      await agent.page.addInitScript(stealthScript);
+      if (agent.context) {
+        agent.context.on('page', async (p) => {
+          await p.addInitScript(stealthScript).catch(() => {});
+        });
+      }
+      onLog('[Runner] Stealth patches applied.');
     };
-
-    // Apply to the initial page
-    await agent.page.addInitScript(stealthScript);
-    // Apply to any future tabs
-    if (agent.context) {
-      agent.context.on('page', async (p) => {
-        await p.addInitScript(stealthScript).catch(() => {});
-      });
-    }
-    onLog('[Runner] Stealth patches applied.');
 
     scraped = await executeGraph(agent, workflow, {
       onLog,
       secrets,
       input,            // trigger payload (webhook body / schedule context) for {{input.x}}
       visionResolver,   // enables tier-3 vision fallback + ai_prompt nodes
+      ensureBrowser,    // Allows the orchestrator to lazy-boot the browser
       db,               // allows branching engine to access Firestore cache
+      onSelfHealed: async (nodeId, healedSelector) => {
+        if (!db || !workflow.id) return;
+        try {
+          const docRef = db.collection('workflows').doc(workflow.id);
+          const doc = await docRef.get();
+          if (!doc.exists) return;
+          const wfData = doc.data();
+          const nodeIndex = wfData.nodes.findIndex(n => n.id === nodeId);
+          if (nodeIndex !== -1) {
+            wfData.nodes[nodeIndex].data = wfData.nodes[nodeIndex].data || {};
+            wfData.nodes[nodeIndex].data.selector = healedSelector;
+            // Keep the description/intentFallback for context, but selector is now primary
+            await docRef.update({ nodes: wfData.nodes });
+            onLog(`[Memory] Persisted healed selector for node "${nodeId}" to Firestore.`);
+          }
+        } catch (e) {
+          onLog(`[Memory] Error saving healed selector: ${e.message}`);
+        }
+      },
       onBlocked: async (block, label) => {
         // No human present in headless mode — fail fast rather than hang.
         throw new Error(`${label} Blocked by ${block.hint}. Headless runs cannot solve CAPTCHAs/MFA.`);

@@ -40,6 +40,7 @@ import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
 import { chatCopilot, compilePrompt, runAiAnalysis } from '../lib/stanleyCloud';
 import { runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
 import { TriggersPanel } from '../components/TriggersPanel';
+import { getIntegrationLabel, getIntegrationsByApp } from '../lib/integrationsCatalog';
 
 // Interface definitions matching the backend data structure
 interface NodeData {
@@ -202,7 +203,7 @@ function WorkflowNodeComponent({ data, selected }: any) {
         {type === 'extract_list' && `List Schema: ${nodeData?.schema ? nodeData.schema.substring(0, 25) + '...' : 'None'}`}
         {type === 'paginate' && `Next: ${nodeData?.selector || nodeData?.description || '?'}, Max: ${nodeData?.maxPages || 3}`}
         {type === 'agent' && `Goal: ${nodeData?.goal || 'None'} [${nodeData?.maxSteps || 8} steps]`}
-        {type === 'integration' && `API: ${nodeData?.integrationName || 'None'}`}
+        {type === 'integration' && `API: ${getIntegrationLabel(nodeData?.integrationName || '')}`}
       </div>
     </div>
   );
@@ -535,6 +536,13 @@ export function CockpitInner() {
     }
   };
 
+  // Node deletion callback
+  const handleDeleteNode = useCallback((id: string) => {
+    setNodes((nds) => nds.filter((node) => node.id !== id));
+    setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+    setSelectedNodeId((prev) => (prev === id ? null : prev));
+  }, [setNodes, setEdges]);
+
   const loadWorkflowInEditor = (wf: Workflow) => {
     setSelectedWorkflow(wf);
     setSelectedNodeId(null);
@@ -552,7 +560,7 @@ export function CockpitInner() {
           type: node.type,
           label: node.label,
           data: node.data || {},
-          onDelete: () => {} // Injected dynamically
+          onDelete: handleDeleteNode
         }
       };
     });
@@ -592,13 +600,6 @@ export function CockpitInner() {
     setNodes(rfNodes);
     setEdges(rfEdges);
   };
-
-  // Node deletion callback
-  const handleDeleteNode = useCallback((id: string) => {
-    setNodes((nds) => nds.filter((node) => node.id !== id));
-    setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-    setSelectedNodeId((prev) => (prev === id ? null : prev));
-  }, [setNodes, setEdges]);
 
   const handleCrystallizeAgent = (nodeId: string, history: any[]) => {
     if (!history || !Array.isArray(history) || history.length === 0) return;
@@ -858,6 +859,14 @@ export function CockpitInner() {
       alert('Failed to create automation. Please try again.');
     }
   };
+
+  useEffect(() => {
+    const handleNewAutomationEvent = () => {
+      handleNewAutomation();
+    };
+    window.addEventListener('new-automation', handleNewAutomationEvent);
+    return () => window.removeEventListener('new-automation', handleNewAutomationEvent);
+  }, [workflows, handleNewAutomation]);
 
   // Rename the open workflow inline from the editor header; persist on commit.
   const updateWorkflowName = (name: string) => {
@@ -1513,7 +1522,7 @@ export function CockpitInner() {
   }, [edges, selectedEdgeId]);
 
   return (
-    <div className="view-container" style={{ maxWidth: '100%' }}>
+    <div className="view-container flex-1 flex flex-col min-h-0" style={{ maxWidth: '100%', height: '100%', gap: '1rem' }}>
       <div className="view-header">
         <div>
           <h1>Automation Cockpit</h1>
@@ -1521,13 +1530,10 @@ export function CockpitInner() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {!showChat && (
-            <button className="btn btn-secondary animate-fade-in" onClick={() => setShowChat(true)}>
-              <Sparkles size={16} style={{ marginRight: '4px', color: '#a855f7' }} /> Open Copilot
+            <button className="btn btn-secondary animate-fade-in cursor-pointer" onClick={() => setShowChat(true)}>
+              <Sparkles size={16} style={{ marginRight: '4px', color: '#6C47FF' }} /> Open Copilot
             </button>
           )}
-          <button className="btn btn-primary" onClick={handleNewAutomation}>
-            <Plus size={16} /> New Automation
-          </button>
         </div>
       </div>
 
@@ -1553,9 +1559,9 @@ export function CockpitInner() {
         </div>
       </div>
 
-      <div className="editor-workspace" style={{ marginTop: '1.5rem', height: 'calc(100vh - 280px)', overflow: 'hidden', display: 'flex', gap: '1rem' }}>
+      <div className="editor-workspace" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', gap: '1rem' }}>
         {/* Left Column: Monitor, Saved workflows list and logs history */}
-        <div className="glass-panel" style={{ width: '23%', display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
+        <div className="glass-panel" style={{ width: '240px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
           {/* Workflows Directory */}
           <div className="data-table-container">
             <h3 style={{ marginBottom: '0.75rem', fontSize: '0.95rem', borderBottom: '1px solid var(--border-strong)', paddingBottom: '0.5rem' }}>Workflows Directory</h3>
@@ -1577,7 +1583,7 @@ export function CockpitInner() {
                     <tr 
                       key={w.id} 
                       onClick={() => loadWorkflowInEditor(w)} 
-                      style={{ cursor: 'pointer', background: selectedWorkflow?.id === w.id ? 'rgba(59, 130, 246, 0.08)' : 'transparent' }}
+                      style={{ cursor: 'pointer', background: selectedWorkflow?.id === w.id ? 'rgba(108, 71, 255, 0.07)' : 'transparent' }}
                     >
                       <td className="font-medium">{w.name}</td>
                       <td>{w.nodes.length} nodes</td>
@@ -1639,7 +1645,7 @@ export function CockpitInner() {
         </div>
 
         {/* Center Column: Visual editor graph */}
-        <div style={{ width: showChat ? '52%' : '77%', display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', transition: 'width 0.2s ease-in-out' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', minWidth: 0 }}>
           {selectedWorkflow ? (
             <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
               <div className="editor-header" style={{ borderBottom: '1px solid var(--border-strong)', padding: '0.5rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1688,9 +1694,9 @@ export function CockpitInner() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {/* Visual Editor sidebar for dragging nodes */}
-                <div style={{ width: '130px', padding: '0.5rem', background: 'rgba(255,255,255,0.01)', borderRight: '1px solid var(--border-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+                <div style={{ width: '130px', padding: '0.5rem', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.45)' }} onClick={() => addNode('mission')}><Target size={12}/> Mission</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.45)' }} onClick={() => addNode('parameter')}><Tag size={12}/> Parameter</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('navigate')}><Globe size={12}/> Navigate</button>
@@ -1727,7 +1733,7 @@ export function CockpitInner() {
                     deleteKeyCode={['Backspace', 'Delete']}
                     fitView
                   >
-                    <Background color="#ffffff" gap={16} />
+                    <Background color="#C8BEFF" gap={20} />
                     <Controls />
                   </ReactFlow>
                 </div>
@@ -2199,8 +2205,15 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                             value={currentNode.data.data?.integrationName || 'gmail_list_messages'}
                             onChange={(e) => updateNodeDataField('integrationName', e.target.value)}
                           >
-                            <option value="gmail_list_messages">Gmail: List Messages</option>
-                            <option value="shopify_list_orders">Shopify: List Orders</option>
+                            {Object.entries(getIntegrationsByApp()).map(([app, items]) => (
+                              <optgroup key={app} label={app}>
+                                {items.map(item => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
                           </select>
                         </div>
                         <div style={{ flex: 2, minWidth: '200px' }}>
@@ -2308,7 +2321,7 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
 
         {/* Right Column: Stanley Copilot (Always Visible!) */}
         {showChat && (
-          <div className="glass-panel chatbot-sidebar" style={{ width: '25%', display: 'flex', flexDirection: 'column', height: '100%', padding: '0', overflow: 'hidden' }}>
+          <div className="glass-panel chatbot-sidebar" style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%', padding: '0', overflow: 'hidden' }}>
             <div className="chat-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#a855f7' }}>
                 <Sparkles size={16} />

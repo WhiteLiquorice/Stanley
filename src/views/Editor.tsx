@@ -7,8 +7,6 @@ import {
   useNodesState, 
   useEdgesState, 
   addEdge, 
-  Position,
-  Handle,
   ReactFlowProvider
 } from '@xyflow/react';
 import type { Connection, Edge as RFEdge, Node as RFNode } from '@xyflow/react';
@@ -23,7 +21,6 @@ import {
   Clock, 
   Plus, 
   Loader, 
-  Trash2,
   ExternalLink,
   RefreshCw,
   X,
@@ -36,6 +33,7 @@ import {
   Square
 } from 'lucide-react';
 import './Views.css';
+import BoutiqueNode from '../components/BoutiqueNode';
 
 // Interface definitions matching the backend data structure
 interface NodeData {
@@ -93,82 +91,8 @@ interface CustomEdgeData extends Record<string, unknown> {
 type MyRFNode = RFNode<CustomNodeData>;
 type MyRFEdge = RFEdge<CustomEdgeData>;
 
-// React Flow Custom Node Component
-function WorkflowNodeComponent({ data, selected }: any) {
-  const { type, label, data: nodeData, onDelete, id } = data;
-
-  const getIcon = (type: string) => {
-    switch (type) {
-      case 'trigger': return <Globe size={14}/>;
-      case 'navigate': return <Globe size={14}/>;
-      case 'click': return <Plus size={14}/>;
-      case 'type': return <Type size={14}/>;
-      case 'wait': return <Clock size={14}/>;
-      case 'scrape': return <Database size={14}/>;
-      case 'open_tab': return <ExternalLink size={14}/>;
-      case 'switch_tab': return <RefreshCw size={14}/>;
-      case 'close_tab': return <X size={14}/>;
-      case 'if': case 'condition': return <GitFork size={14}/>;
-      case 'goto': return <ArrowRight size={14}/>;
-      case 'label': return <Bookmark size={14}/>;
-      case 'ai_prompt': return <Sparkles size={14}/>;
-      case 'js_code': return <Code size={14}/>;
-      default: return <Plus size={14}/>;
-    }
-  };
-
-  return (
-    <div className={`mock-node ${type} ${selected ? 'selected-node' : ''}`}>
-      {type !== 'trigger' && (
-        <Handle 
-          type="target" 
-          position={Position.Top} 
-          style={{ background: 'var(--border-strong)', width: 8, height: 8 }} 
-        />
-      )}
-      
-      <div className="node-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {getIcon(type)} 
-          <span>{label || type}</span>
-        </div>
-        {type !== 'trigger' && (
-          <button 
-            className="delete-node-btn" 
-            onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-          >
-            <Trash2 size={12} />
-          </button>
-        )}
-      </div>
-      <div className="node-content">
-        {type === 'trigger' && `URL: ${nodeData?.url || 'None'}`}
-        {type === 'navigate' && `URL: ${nodeData?.url || 'None'}`}
-        {type === 'click' && `Target: ${nodeData?.description || nodeData?.selector || 'None'}`}
-        {type === 'type' && `Type: ${nodeData?.value || ''} into ${nodeData?.description || nodeData?.selector || ''}`}
-        {type === 'wait' && `Wait: ${nodeData?.ms || '1000'}ms`}
-        {type === 'scrape' && `Selector: ${nodeData?.selector || 'body'}`}
-        {type === 'open_tab' && `URL: ${nodeData?.url || 'Blank'} [${nodeData?.label || 'No Label'}]`}
-        {type === 'switch_tab' && `Tab: ${nodeData?.tab || nodeData?.index || '0'}`}
-        {type === 'close_tab' && `Tab: ${nodeData?.tab || nodeData?.index || '0'}`}
-        {(type === 'if' || type === 'condition') && `Condition: ${nodeData?.condition?.type || 'always'}`}
-        {type === 'goto' && `Goto: ${nodeData?.label || 'None'}`}
-        {type === 'label' && `Label: ${nodeData?.label || 'None'}`}
-        {type === 'ai_prompt' && `Prompt: ${nodeData?.prompt ? (nodeData.prompt.substring(0, 30) + '...') : 'None'}`}
-        {type === 'js_code' && `Script: ${nodeData?.code ? (nodeData.code.substring(0, 30) + '...') : 'None'}`}
-      </div>
-
-      <Handle 
-        type="source" 
-        position={Position.Bottom} 
-        style={{ background: 'var(--border-strong)', width: 8, height: 8 }} 
-      />
-    </div>
-  );
-}
-
 const nodeTypes = {
-  workflowNode: WorkflowNodeComponent
+  workflowNode: BoutiqueNode,
 };
 
 export function EditorInner() {
@@ -839,7 +763,7 @@ export function EditorInner() {
               onSelectionChange={onSelectionChange}
               fitView
             >
-              <Background color="#ffffff" gap={16} />
+              <Background color="#C8BEFF" gap={20} />
               <Controls />
               <MiniMap 
                 nodeColor={(n) => {
@@ -850,7 +774,7 @@ export function EditorInner() {
                   if (type === 'if' || type === 'condition') return '#F97316';
                   return '#6B7280';
                 }}
-                maskColor="rgba(0, 0, 0, 0.4)"
+                maskColor="rgba(91, 71, 224, 0.05)"
               />
             </ReactFlow>
           </div>

@@ -89,8 +89,30 @@ export async function executeGraph(agent, workflow, opts = {}) {
     try {
       await runGraphNode(agent, current, { onLog, secrets, scraped, ctx, label });
     } catch (err) {
-      ctx.lastError = err;
-      onLog(`${label} ERROR: ${err.message}`);
+      // --- FAULT TOLERANCE: Auto-resolve common SSO auth blocks ---
+      onLog(`[Recovery] Checking for common auth blocks (e.g., Sign in with Google)...`);
+      let ssoClicked = false;
+      try {
+        if (await agent.clickByNaturalLocator("Sign in with Google") || await agent.clickByNaturalLocator("Continue with Google")) {
+          ssoClicked = true;
+        }
+      } catch(e) {}
+
+      if (ssoClicked) {
+        onLog(`[Recovery] Auto-resolved by clicking Google SSO. Waiting for auth flow...`);
+        await agent.wait(5000);
+        onLog(`[Recovery] Retrying original step...`);
+        try {
+          await runGraphNode(agent, current, { onLog, secrets, scraped, ctx, label });
+          ctx.lastError = null;
+        } catch (retryErr) {
+          ctx.lastError = retryErr;
+          onLog(`${label} ERROR after SSO retry: ${retryErr.message}`);
+        }
+      } else {
+        ctx.lastError = err;
+        onLog(`${label} ERROR: ${err.message}`);
+      }
     }
 
     if (onBlocked && typeof agent.isPageBlocked === 'function') {
@@ -122,7 +144,11 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label }
 
   switch (node.type) {
     case 'trigger':
-      if (data.url) { onLog(`${label} Navigating to ${data.url}`); await agent.navigate(data.url); }
+      if (data.url) { 
+        onLog(`${label} Opening new tab for trigger: ${data.url}`); 
+        const id = await agent.openTab(data.url, 'Start');
+        await agent.switchTab(id);
+      }
       else onLog(`${label} Trigger (no URL).`);
       break;
 

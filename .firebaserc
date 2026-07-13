@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "bridgeway-db29e"
+  },
+  "targets": {
+    "bridgeway-db29e": {
+      "hosting": {
+        "stanley": [
+          "bridgeway-db29e-stanley"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

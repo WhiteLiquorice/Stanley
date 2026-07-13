@@ -129,4 +129,24 @@ async function generateText(prompt, systemInstruction) {
   return await callGemini(body);
 }
 
-module.exports = { resolveElement, generateText };
+/**
+ * Image analysis for `vision` nodes. Returns the model's text reply based on the screenshot.
+ */
+async function visionAnalysis(prompt, systemInstruction, screenshotBase64) {
+  const body = {
+    contents: [{
+      role: 'user',
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: 'image/jpeg', data: screenshotBase64 } },
+      ],
+    }],
+    generationConfig: { temperature: 0.2 },
+  };
+  if (systemInstruction) {
+    body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+  return await callGemini(body);
+}
+
+module.exports = { resolveElement, generateText, visionAnalysis };

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Plus, Key, Trash2, Loader } from 'lucide-react';
-import './Views.css';
+
 import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
 
 interface Secret {
@@ -91,51 +91,65 @@ export function Vault() {
   };
 
   return (
-    <div className="view-container">
-      <div className="view-header">
+    <div className="flex flex-col h-full bg-[#FDFBF7] text-[#1C1A17] p-6">
+      <div className="mb-6 flex justify-between items-end">
         <div>
-          <h1>Credential Vault</h1>
-          <p>Securely manage API keys, OAuth tokens, and secrets.</p>
+          <h2 className="text-xl font-bold text-slate-800">Credential Vault</h2>
+          <p className="text-xs text-slate-500 mt-1">Securely manage API keys, OAuth tokens, and secrets.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
-          <Plus size={16} /> Add New Secret
+        <button 
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-xs font-bold text-white shadow-md shadow-indigo-600/10 border border-indigo-600/20 transition-all cursor-pointer"
+          onClick={() => setShowAddModal(true)}
+        >
+          <Plus size={14} /> Add New Secret
         </button>
       </div>
 
       {loading ? (
-        <div className="loading-state"><Loader className="spinner"/> Loading credentials...</div>
+        <div className="flex items-center justify-center h-48 text-slate-500 text-sm gap-2">
+          <Loader className="w-4 h-4 animate-spin"/> Loading credentials...
+        </div>
       ) : secrets.length === 0 ? (
-        <div className="empty-state">No credentials found in vault. Add one to secure your APIs!</div>
+        <div className="flex items-center justify-center h-48 text-slate-400 text-sm border border-[#EAE6DF] rounded-2xl bg-white border-dashed shadow-sm">
+          No credentials found in vault. Add one to secure your APIs!
+        </div>
       ) : (
-        <div className="vault-grid">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-6">
           {secrets.map((secret) => (
-            <div key={secret.id} className="secret-card glass-panel">
-              <div className="secret-header">
-                <div className="icon-wrapper">
-                  <Key size={20} className="text-accent-blue" />
+            <div key={secret.id} className="bg-white border border-[#EAE6DF] rounded-2xl p-5 flex flex-col gap-4 shadow-sm hover:border-slate-300 transition-colors">
+              <div className="flex justify-between items-start">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center">
+                  <Key size={18} className="text-indigo-600" />
                 </div>
-                <button className="icon-btn text-accent-danger" onClick={() => handleDeleteSecret(secret.id)} title="Delete Secret">
-                  <Trash2 size={16} />
+                <button 
+                  className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                  onClick={() => handleDeleteSecret(secret.id)} 
+                  title="Delete Secret"
+                >
+                  <Trash2 size={14} />
                 </button>
               </div>
-              <div className="secret-body">
-                <h3>{secret.name}</h3>
-                <p className="secret-type">{secret.type}</p>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">{secret.name}</h3>
+                <p className="text-xs text-slate-500 mt-1 font-semibold">{secret.type}</p>
                 {secret.type === LOGIN_TYPE ? (
-                  <div style={{ marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.72rem', color: 'var(--text-tertiary)', lineHeight: 1.6 }}>
-                    <div>👤 {secret.username || '—'}</div>
+                  <div className="mt-3 font-mono text-[10px] text-slate-600 flex flex-col gap-1 bg-[#F5F2EC]/85 p-2.5 rounded-lg border border-[#EAE6DF]">
+                    <div className="text-slate-800">👤 {secret.username || '—'}</div>
                     <div>vault:{secret.name}.username</div>
                     <div>vault:{secret.name}.password</div>
                   </div>
                 ) : (
-                  <div style={{ marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                  <div className="mt-3 font-mono text-[10px] text-slate-600 bg-[#F5F2EC]/85 p-2.5 rounded-lg border border-[#EAE6DF]">
                     Value: vault:{secret.name}
                   </div>
                 )}
               </div>
-              <div className="secret-footer">
-                <span className={`status-indicator ${secret.status.toLowerCase()}`}></span>
-                <span className="expires-text">{secret.expires}</span>
+              <div className="flex justify-between items-center mt-auto pt-4 border-t border-[#EAE6DF]">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${secret.status.toLowerCase() === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{secret.status}</span>
+                </div>
+                <span className="text-[10px] text-slate-500 font-semibold text-right">Expires: {secret.expires}</span>
               </div>
             </div>
           ))}
@@ -144,82 +158,101 @@ export function Vault() {
 
       {/* Add Secret Modal */}
       {showAddModal && (
-        <div className="modal-overlay">
-          <div className="modal-content glass-panel">
-            <h2>Add New Secret</h2>
-            <form onSubmit={handleAddSecret}>
-              <div className="form-group">
-                <label>Secret Name</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  value={secretName} 
-                  onChange={(e) => setSecretName(e.target.value)} 
-                  placeholder="e.g. GitHub Token, Production DB Pass" 
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>Secret Type</label>
-                <select className="form-input" value={secretType} onChange={(e) => setSecretType(e.target.value)}>
-                  <option>{LOGIN_TYPE}</option>
-                  <option>API Key</option>
-                  <option>OAuth2 Token</option>
-                  <option>Bot Token</option>
-                  <option>Password</option>
-                </select>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white border border-[#EAE6DF] rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-[#EAE6DF] bg-[#FDFBF7]">
+              <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Add New Secret</h2>
+            </div>
+            <div className="p-6">
+              <form onSubmit={handleAddSecret} className="flex flex-col gap-5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Secret Name</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-[#F5F2EC] border border-[#EAE6DF] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none transition-all"
+                    value={secretName} 
+                    onChange={(e) => setSecretName(e.target.value)} 
+                    placeholder="e.g. GitHub Token, Production DB Pass" 
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Secret Type</label>
+                  <select 
+                    className="w-full bg-[#F5F2EC] border border-[#EAE6DF] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 rounded-xl px-4 py-2 text-sm text-slate-800 focus:outline-none transition-all"
+                    value={secretType} 
+                    onChange={(e) => setSecretType(e.target.value)}
+                  >
+                    <option>{LOGIN_TYPE}</option>
+                    <option>API Key</option>
+                    <option>OAuth2 Token</option>
+                    <option>Bot Token</option>
+                    <option>Password</option>
+                  </select>
+                </div>
 
-              {isLogin ? (
-                <>
-                  <div className="form-group">
-                    <label>Username / Email</label>
+                {isLogin ? (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Username / Email</label>
+                      <input
+                        type="text"
+                        className="w-full bg-[#F5F2EC] border border-[#EAE6DF] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none transition-all"
+                        value={secretUsername}
+                        onChange={(e) => setSecretUsername(e.target.value)}
+                        placeholder="e.g. you@business.com"
+                        autoComplete="off"
+                        required
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
+                      <input
+                        type="password"
+                        className="w-full bg-[#F5F2EC] border border-[#EAE6DF] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none transition-all"
+                        value={secretPassword}
+                        onChange={(e) => setSecretPassword(e.target.value)}
+                        placeholder="Enter password"
+                        autoComplete="new-password"
+                        required
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Reference as <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded">vault:{secretName || 'Name'}.username</code> and <code className="text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded">vault:{secretName || 'Name'}.password</code>.
+                    </p>
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Secret Value</label>
                     <input
-                      type="text"
-                      className="form-input"
-                      value={secretUsername}
-                      onChange={(e) => setSecretUsername(e.target.value)}
-                      placeholder="e.g. you@business.com"
+                      type="password"
+                      className="w-full bg-[#F5F2EC] border border-[#EAE6DF] focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none transition-all"
+                      value={secretValue}
+                      onChange={(e) => setSecretValue(e.target.value)}
+                      placeholder="Enter token or password"
                       autoComplete="off"
                       required
                     />
                   </div>
-                  <div className="form-group">
-                    <label>Password</label>
-                    <input
-                      type="password"
-                      className="form-input"
-                      value={secretPassword}
-                      onChange={(e) => setSecretPassword(e.target.value)}
-                      placeholder="Enter password"
-                      autoComplete="new-password"
-                      required
-                    />
-                  </div>
-                  <p style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginTop: '-4px' }}>
-                    In a workflow, reference these as <code>vault:{secretName || 'Name'}.username</code> and <code>vault:{secretName || 'Name'}.password</code>.
-                  </p>
-                </>
-              ) : (
-                <div className="form-group">
-                  <label>Secret Value</label>
-                  <input
-                    type="password"
-                    className="form-input"
-                    value={secretValue}
-                    onChange={(e) => setSecretValue(e.target.value)}
-                    placeholder="Enter token or password"
-                    autoComplete="off"
-                    required
-                  />
-                </div>
-              )}
+                )}
 
-              <div className="modal-actions">
-                <button type="button" className="btn btn-secondary" onClick={() => { setShowAddModal(false); resetForm(); }}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Secret</button>
-              </div>
-            </form>
+                <div className="flex gap-3 justify-end mt-4">
+                  <button 
+                    type="button" 
+                    className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                    onClick={() => { setShowAddModal(false); resetForm(); }}
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-sm font-bold text-white shadow-md shadow-indigo-600/10 transition-colors cursor-pointer"
+                  >
+                    Save Secret
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

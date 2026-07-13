@@ -67,6 +67,11 @@ export function TriggersPanel({ workflow, onClose }: Props) {
   const [dow, setDow] = useState(1);
   const [customCron, setCustomCron] = useState('0 9 * * 1-5');
   const [newToken, setNewToken] = useState<{ id: string; token: string } | null>(null);
+  
+  // Failure alert inputs
+  const [notifyOnFailure, setNotifyOnFailure] = useState(false);
+  const [notifyType, setNotifyType] = useState<'email' | 'webhook' | 'slack'>('email');
+  const [notifyTarget, setNotifyTarget] = useState(localStorage.getItem('stanley_email') || '');
 
   // Email inputs
   const [emailQuery, setEmailQuery] = useState('subject:"Billing Alert"');
@@ -95,7 +100,16 @@ export function TriggersPanel({ workflow, onClose }: Props) {
   const addSchedule = async () => {
     const { cron, nextRunMs } = buildSchedule(preset, time, dow, customCron);
     const id = randomHex(5);
-    const doc: Schedule = { id, workflowId: workflow.id, cron, timezone: TZ, enabled: true, nextRunMs, preset };
+    const doc: Schedule & { notifyOnFailure?: { type: string; target: string } } = { 
+      id, 
+      workflowId: workflow.id, 
+      cron, 
+      timezone: TZ, 
+      enabled: true, 
+      nextRunMs, 
+      preset,
+      ...(notifyOnFailure && notifyTarget ? { notifyOnFailure: { type: notifyType, target: notifyTarget.trim() } } : {})
+    };
     await setDoc('schedules', id, { ...doc, workflowName: workflow.name } as any);
     load();
   };
@@ -187,17 +201,63 @@ export function TriggersPanel({ workflow, onClose }: Props) {
           <button className="btn btn-primary btn-sm" onClick={addSchedule}><Plus size={14} /> Add</button>
         </div>
         <div style={{ fontSize: '0.68rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>Times are in your timezone ({TZ}).</div>
+        
+        {/* Failure Alerts Form Options */}
+        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '10px 12px', marginBottom: '1.25rem', marginTop: '0.5rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', userSelect: 'none', color: '#f1f5f9' }}>
+            <input 
+              type="checkbox" 
+              checked={notifyOnFailure} 
+              onChange={e => setNotifyOnFailure(e.target.checked)} 
+              style={{ margin: 0, cursor: 'pointer' }}
+            />
+            <span>Notify me on failure</span>
+          </label>
+          
+          {notifyOnFailure && (
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginTop: '8px', paddingLeft: '22px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.65rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>Alert Channel</label>
+                <select className="form-input text-xs" style={{ padding: '4px 8px', fontSize: '0.8rem' }} value={notifyType} onChange={e => setNotifyType(e.target.value as any)}>
+                  <option value="email">Email</option>
+                  <option value="webhook">Webhook POST</option>
+                  <option value="slack">Slack Webhook</option>
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: '220px' }}>
+                <label style={{ display: 'block', fontSize: '0.65rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>
+                  {notifyType === 'email' ? 'Email Address' : notifyType === 'slack' ? 'Slack Webhook URL' : 'POST URL'}
+                </label>
+                <input
+                  type="text"
+                  className="form-input text-xs w-full"
+                  style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                  placeholder={notifyType === 'email' ? 'you@example.com' : 'https://hooks.slack.com/...'}
+                  value={notifyTarget}
+                  onChange={e => setNotifyTarget(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         {schedules.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: '0.8rem', paddingBottom: '0.5rem' }}>No active schedules.</div>
         ) : schedules.map(s => (
-          <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
             <div style={{ fontSize: '0.82rem' }}>
               <span style={{ opacity: s.enabled ? 1 : 0.45 }}>{describe(s)}</span>
               <span style={{ color: 'var(--text-tertiary)', fontSize: '0.7rem', marginLeft: '8px' }}>
                 next {new Date(s.nextRunMs).toLocaleString()} {s.lastStatus ? `· last: ${s.lastStatus}` : ''}
               </span>
+              {(s as any).notifyOnFailure && (
+                <div style={{ fontSize: '0.72rem', color: '#a855f7', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
+                  <span>🔔 Failure alert via {(s as any).notifyOnFailure.type} to</span>
+                  <code style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{(s as any).notifyOnFailure.target}</code>
+                </div>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
               <button className="btn btn-secondary btn-sm" title={s.enabled ? 'Disable' : 'Enable'} onClick={() => toggleSchedule(s)} style={{ padding: '2px 6px', color: s.enabled ? 'var(--accent-green)' : 'var(--text-tertiary)' }}><Power size={12} /></button>
               <button className="btn btn-secondary btn-sm" title="Delete" onClick={() => removeSchedule(s.id)} style={{ padding: '2px 6px' }}><Trash2 size={12} /></button>
             </div>

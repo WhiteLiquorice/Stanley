@@ -181,15 +181,22 @@
 .editor-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 64px - var(--spacing-xl) * 2);
-  gap: var(--spacing-md);
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  gap: var(--spacing-md, 1rem);
+  padding: var(--spacing-lg, 1.5rem);
+  box-sizing: border-box;
 }
 
 .editor-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--spacing-sm) var(--spacing-lg);
+  padding: 0.5rem 1rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-strong);
+  gap: 0.75rem;
 }
 
 .breadcrumb {
@@ -200,7 +207,7 @@
 }
 
 .select-workflow {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   color: var(--text-primary);
   padding: 0.25rem 0.5rem;
@@ -218,54 +225,71 @@
   display: flex;
   gap: var(--spacing-md);
   overflow: hidden;
+  min-height: 0;
 }
 
 .editor-sidebar {
-  width: 240px;
-  padding: var(--spacing-md);
+  width: 140px;
+  padding: 0.5rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: 0.25rem;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-strong);
 }
 
 .sidebar-section h3 {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--text-tertiary);
-  margin-bottom: var(--spacing-sm);
+  margin-bottom: 0.375rem;
+  padding: 0 0.25rem;
 }
 
 .node-item {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  padding: var(--spacing-sm);
+  gap: 6px;
+  padding: 6px 8px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
   cursor: pointer;
-  margin-bottom: var(--spacing-sm);
   width: 100%;
   text-align: left;
-  color: var(--text-primary);
-  transition: background var(--transition-fast);
+  color: var(--text-secondary);
+  transition: all 150ms ease;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .node-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(108, 71, 255, 0.08);
+  border-color: rgba(108, 71, 255, 0.25);
+  color: #4C1D95;
+  transform: translateX(2px);
+}
+
+.btn-node {
+  justify-content: flex-start;
 }
 
 .editor-canvas {
   flex: 1;
   position: relative;
-  overflow: auto;
+  overflow: hidden;
+  min-height: 0;
+  background: var(--bg-deep);
 }
 
 .canvas-bg {
-  background-image: radial-gradient(var(--border-strong) 1px, transparent 0);
-  background-size: 24px 24px;
+  background-image: radial-gradient(rgba(108, 71, 255, 0.12) 1.5px, transparent 0);
+  background-size: 28px 28px;
 }
 
 .mock-node {
@@ -285,8 +309,8 @@
 }
 
 .mock-node.selected-node {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+  border-color: #6C47FF;
+  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.18);
 }
 
 .mock-node.trigger { border-top: 3px solid var(--accent-blue); }
@@ -309,8 +333,8 @@
   border-color: var(--border-subtle);
 }
 .workflow-name-input:focus {
-  border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: #6C47FF;
+  background: rgba(108, 71, 255, 0.04);
 }
 
 /* Super node — overall mission/goal (gold, banner-like) */
@@ -336,7 +360,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-surface);
 }
 
 .node-header > div {
@@ -392,17 +416,24 @@
 
 .form-input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-surface);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  padding: var(--spacing-sm);
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: 0.8rem;
+  transition: all 150ms ease;
+}
+
+.form-input:hover {
+  border-color: #A8B3C8;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: var(--accent-blue);
+  border-color: #6C47FF;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.15);
 }
 
 /* Modals */
@@ -581,7 +612,7 @@
   background: var(--bg-surface) !important;
   border: 1px solid var(--border-strong) !important;
   border-radius: var(--radius-md) !important;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: 0 2px 8px rgba(30, 40, 70, 0.08) !important;
 }
 
 .react-flow__controls-button {
@@ -592,7 +623,7 @@
 }
 
 .react-flow__controls-button:hover {
-  background: rgba(255, 255, 255, 0.08) !important;
+  background: var(--bg-surface-elevated) !important;
   fill: var(--text-primary) !important;
   color: var(--text-primary) !important;
 }
@@ -601,7 +632,7 @@
   background: var(--bg-surface) !important;
   border: 1px solid var(--border-strong) !important;
   border-radius: var(--radius-md) !important;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: 0 2px 8px rgba(30, 40, 70, 0.08) !important;
 }
 
 /* Custom border colors for various node types in visual editor */
@@ -636,7 +667,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.01);
+  background: var(--bg-surface);
 }
 
 .chat-messages {
@@ -672,8 +703,8 @@
 }
 
 .chat-message.user .chat-bubble {
-  background: rgba(168, 85, 247, 0.1);
-  border-color: rgba(168, 85, 247, 0.3);
+  background: rgba(108, 71, 255, 0.08);
+  border-color: rgba(108, 71, 255, 0.22);
   border-top-left-radius: var(--radius-md);
   border-top-right-radius: 2px;
 }
@@ -690,15 +721,15 @@
 }
 
 .chat-avatar.stanley {
-  background: rgba(168, 85, 247, 0.2);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.4);
+  background: rgba(108, 71, 255, 0.12);
+  color: #6C47FF;
+  border: 1px solid rgba(108, 71, 255, 0.28);
 }
 
 .chat-avatar.user {
-  background: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: #EEF1F6;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
 }
 
 .chat-suggestions {
@@ -706,12 +737,12 @@
   flex-wrap: wrap;
   gap: 0.35rem;
   padding: 0.5rem 1rem;
-  border-top: 1px solid var(--border-subtle);
-  background: rgba(0,0,0,0.1);
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-surface-elevated);
 }
 
 .suggestion-chip {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
   padding: 3px 8px;
@@ -722,9 +753,9 @@
 }
 
 .suggestion-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
-  border-color: var(--text-secondary);
+  background: rgba(108, 71, 255, 0.07);
+  color: #5535E0;
+  border-color: rgba(108, 71, 255, 0.3);
 }
 
 .chat-input-container {
@@ -732,12 +763,12 @@
   border-top: 1px solid var(--border-strong);
   display: flex;
   gap: 0.5rem;
-  background: rgba(255, 255, 255, 0.01);
+  background: var(--bg-surface);
 }
 
 .chat-input {
   flex: 1;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-surface-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: 0.4rem 0.75rem;
@@ -747,7 +778,9 @@
 }
 
 .chat-input:focus {
-  border-color: #a855f7;
+  border-color: #6C47FF;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.12);
 }
 
 .action-badge {

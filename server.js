@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const cron = require('node-cron');
 // Use the branching-aware runner so the web "Test Run" honors the same engine the
 // visual Editor builds against (conditional edges, if/goto/label, ai_prompt, js_code,
 // stable multi-tab ids). The original linear ./runner.js only followed the first edge.
@@ -79,6 +80,34 @@ if (!fs.existsSync(RUNS_FILE)) {
 // In-memory active runs log storage
 const activeRuns = {};
 
+// ── Run Queue with Concurrency Control ───────────────────────────────────────
+const MAX_CONCURRENT = 2;
+let runningCount = 0;
+const runQueue = [];
+
+function drainQueue() {
+  while (runningCount < MAX_CONCURRENT && runQueue.length > 0) {
+    const job = runQueue.shift();
+    runningCount++;
+    job().finally(() => {
+      runningCount--;
+      drainQueue();
+    });
+  }
+}
+
+function enqueueRun(fn) {
+  if (runningCount < MAX_CONCURRENT) {
+    runningCount++;
+    fn().finally(() => {
+      runningCount--;
+      drainQueue();
+    });
+  } else {
+    runQueue.push(fn);
+  }
+}
+
 // Helper read/write functions
 function readData(file) {
   try {
@@ -91,6 +120,11 @@ function readData(file) {
 function writeData(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
+
+// REST Endpoint - Queue Status
+app.get('/api/queue', (req, res) => {
+  res.json({ running: runningCount, queued: runQueue.length, maxConcurrent: MAX_CONCURRENT });
+});
 
 // REST Endpoints - Workflows
 app.get('/api/workflows', (req, res) => {
@@ -110,13 +144,20 @@ app.post('/api/workflows', (req, res) => {
     workflows.push(newWorkflow);
   }
   writeData(WORKFLOWS_FILE, workflows);
-  res.json(newWorkflow);
+  scheduleWorkflow(newWorkflow);
+  res.json({ success: true, workflow: newWorkflow });
 });
 
 app.delete('/api/workflows/:id', (req, res) => {
-  const workflows = readData(WORKFLOWS_FILE);
-  const filtered = workflows.filter(w => w.id !== req.params.id);
-  writeData(WORKFLOWS_FILE, filtered);
+  let workflows = readData(WORKFLOWS_FILE);
+  workflows = workflows.filter(w => w.id !== req.params.id);
+  writeData(WORKFLOWS_FILE, workflows);
+  
+  if (activeCronJobs[req.params.id]) {
+    activeCronJobs[req.params.id].stop();
+    delete activeCronJobs[req.params.id];
+  }
+  
   res.json({ success: true });
 });
 
@@ -219,8 +260,8 @@ app.post('/api/run/:id', async (req, res) => {
     startTime: Date.now()
   };
 
-  // Run async so we don't block the HTTP request response
-  runWorkflow(
+  // Run async via queue so we don't exceed MAX_CONCURRENT browser instances
+  enqueueRun(() => runWorkflow(
     workflowCopy,
     (logMsg) => {
       if (activeRuns[runId]) {
@@ -263,9 +304,86 @@ app.post('/api/run/:id', async (req, res) => {
         writeData(RUNS_FILE, currentRuns);
       }
     }
-  });
+  }));
 
   res.json({ success: true, runId });
+});
+
+// Incoming Webhook Trigger
+app.post('/api/webhook/:id', async (req, res) => {
+  const workflows = readData(WORKFLOWS_FILE);
+  const workflow = workflows.find(w => w.id === req.params.id);
+  
+  if (!workflow) {
+    return res.status(404).json({ error: 'Workflow not found' });
+  }
+
+  const workflowCopy = JSON.parse(JSON.stringify(workflow));
+  const runId = Math.random().toString(36).substring(2, 9);
+  const runs = readData(RUNS_FILE);
+  
+  const newRun = {
+    id: runId,
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    status: 'Running',
+    trigger: 'Webhook',
+    duration: '0s',
+    timestamp: new Date().toLocaleString(),
+    logs: []
+  };
+
+  runs.unshift(newRun);
+  writeData(RUNS_FILE, runs);
+
+  activeRuns[runId] = {
+    status: 'Running',
+    logs: ['[System] Initializing run via Webhook...'],
+    startTime: Date.now()
+  };
+
+  enqueueRun(() => runWorkflow(
+    workflowCopy,
+    (logMsg) => {
+      if (activeRuns[runId]) activeRuns[runId].logs.push(logMsg);
+    },
+    readData(VAULT_FILE).reduce((acc, curr) => {
+      if (curr.id) acc[curr.id] = curr.value;
+      if (curr.name) acc[curr.name] = curr.value;
+      return acc;
+    }, {}),
+    req.body // Pass webhook payload as input
+  ).then(() => {
+    if (activeRuns[runId]) {
+      activeRuns[runId].status = 'Success';
+      activeRuns[runId].logs.push('[System] Run finished successfully!');
+      
+      const currentRuns = readData(RUNS_FILE);
+      const idx = currentRuns.findIndex(r => r.id === runId);
+      if (idx !== -1) {
+        currentRuns[idx].status = 'Success';
+        currentRuns[idx].duration = `${Math.round((Date.now() - activeRuns[runId].startTime) / 1000)}s`;
+        currentRuns[idx].logs = activeRuns[runId].logs;
+        writeData(RUNS_FILE, currentRuns);
+      }
+    }
+  }).catch((err) => {
+    if (activeRuns[runId]) {
+      activeRuns[runId].status = 'Failed';
+      activeRuns[runId].logs.push(`[System Error] ${err.message}`);
+      
+      const currentRuns = readData(RUNS_FILE);
+      const idx = currentRuns.findIndex(r => r.id === runId);
+      if (idx !== -1) {
+        currentRuns[idx].status = 'Failed';
+        currentRuns[idx].duration = `${Math.round((Date.now() - activeRuns[runId].startTime) / 1000)}s`;
+        currentRuns[idx].logs = activeRuns[runId].logs;
+        writeData(RUNS_FILE, currentRuns);
+      }
+    }
+  }));
+
+  res.json({ success: true, runId, message: 'Workflow queued via Webhook' });
 });
 
 // REST Endpoints - Workflow Recorder ("record once, replay")
@@ -362,6 +480,12 @@ Supported Node Types:
 - 'label': Step label target for goto, takes "label" in data.
 - 'ai_prompt': Run AI analysis via Gemini, takes "prompt" and "system" (optional) in data.
 - 'js_code': Execute custom javascript block, takes "code" in data.
+- 'http_request': Make an HTTP API call WITHOUT a browser. Takes "method" (GET/POST/PUT/DELETE), "url", "headers" (JSON string), and "body" (JSON string for POST/PUT) in data. Response is stored as scraped output. Use this for REST APIs like Slack, Airtable, Notion, etc.
+- 'loop': Iterate over an array from a prior node. Takes "sourceNodeId" (id of a node that produced an array) and "maxItems" (default 50) in data. Inside the loop, downstream nodes can use {{loop.fieldName}} to reference the current item.
+- 'transform': Transform data without code. Takes "operation" (one of: extract_regex, replace, json_parse, filter_array, sort_array, to_upper, to_lower, trim, count, first_item, last_item, format_date), "input" (a {{nodeId}} reference or {{lastScrape}}), and "param" (the regex pattern, sort key, etc.) in data. For 'replace', also takes "find" and "replaceWith".
+- 'send_slack': Send a Slack message via webhook. Takes "webhookUrl" (or "vault:SlackWebhook") and "message" in data.
+- 'send_email': Send an email via Firebase Function. Takes "to", "subject", and "body" in data.
+- 'monitor': Detect page content changes. Takes "selector" in data. Hashes page content and compares to previous hash. Sets lastConditionResult to true if changed, false if unchanged. Use with an 'if' node to branch on changes.
 
 Supported Actions in your response:
 1. {"type": "add_node", "node": { "id": "unique_string", "type": "node_type", "label": "Label", "data": { ... }, "position": { "x": number, "y": number } }}
@@ -561,6 +685,146 @@ Output MUST be a valid JSON array of objects. Do not wrap it in markdown code fe
   }
 });
 
+// REST Endpoint - AI Failure Explainer
+app.post('/api/ai/explain-failure', async (req, res) => {
+  const { logs, workflow } = req.body;
+  
+  let apiKey = process.env.GEMINI_API_KEY;
+  const secrets = readData(VAULT_FILE);
+  const googleSecret = secrets.find(s => s.name === 'Google API Key' || s.id === '2');
+  if (googleSecret && googleSecret.value && !googleSecret.value.startsWith('AIzaSyMockKey')) {
+    apiKey = googleSecret.value;
+  }
+  
+  if (!apiKey) {
+    return res.status(400).json({ error: 'Google Gemini API Key is missing.' });
+  }
+
+  try {
+    const systemPrompt = `You are a debugging assistant for Stanley, a browser automation platform. A user's workflow has failed. Given the execution logs and workflow name, identify the most likely root cause and provide:
+1. "explanation": A 2-3 sentence plain-English explanation of what went wrong and why.
+2. "suggestion": One concrete, actionable fix the user can apply (e.g., "Change the click description from 'Submit' to 'Continue' because the page uses 'Continue' as the button text.").
+
+Respond in strict JSON: {"explanation": "...", "suggestion": "..."}`;
+
+    const userPrompt = `Workflow: "${workflow || 'Unknown'}"\n\nExecution logs (last entries):\n${(logs || []).join('\n')}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: { responseMimeType: 'application/json' }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(500).json({ error: `Gemini API error: ${errText}` });
+    }
+
+    const data = await response.json();
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    res.json(JSON.parse(resultText));
+  } catch (err) {
+    res.status(500).json({ error: `Failed to explain failure: ${err.message}` });
+  }
+});
+
+// === CRON SCHEDULING SYSTEM ===
+const activeCronJobs = {};
+
+function scheduleWorkflow(workflow) {
+  // Clear existing job
+  if (activeCronJobs[workflow.id]) {
+    activeCronJobs[workflow.id].stop();
+    delete activeCronJobs[workflow.id];
+  }
+  
+  if (!workflow.nodes) return;
+  const triggerNode = workflow.nodes.find(n => n.type === 'schedule_trigger');
+  if (triggerNode && triggerNode.data && triggerNode.data.value) {
+    const expr = triggerNode.data.value; // e.g. "*/15 * * * *"
+    if (cron.validate(expr)) {
+      activeCronJobs[workflow.id] = cron.schedule(expr, () => {
+        console.log(`[Cron] Triggering workflow ${workflow.name} (${workflow.id})`);
+        
+        // Setup run data
+        const runId = Math.random().toString(36).substring(2, 9);
+        const runs = readData(RUNS_FILE);
+        const newRun = {
+          id: runId,
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          status: 'Running',
+          trigger: 'Scheduled (Cron)',
+          duration: '0s',
+          timestamp: new Date().toLocaleString(),
+          logs: []
+        };
+        runs.unshift(newRun);
+        writeData(RUNS_FILE, runs);
+        
+        activeRuns[runId] = {
+          status: 'Running',
+          logs: ['[System] Initializing run via Cron schedule...'],
+          startTime: Date.now()
+        };
+
+        const workflowCopy = JSON.parse(JSON.stringify(workflow));
+        const secrets = readData(VAULT_FILE).reduce((acc, curr) => {
+          if (curr.id) acc[curr.id] = curr.value;
+          if (curr.name) acc[curr.name] = curr.value;
+          return acc;
+        }, {});
+
+        enqueueRun(() => runWorkflow(
+          workflowCopy,
+          (logMsg) => {
+            if (activeRuns[runId]) activeRuns[runId].logs.push(logMsg);
+          },
+          secrets
+        ).then(() => {
+          if (activeRuns[runId]) {
+            activeRuns[runId].status = 'Success';
+            activeRuns[runId].logs.push('[System] Run finished successfully!');
+            const currentRuns = readData(RUNS_FILE);
+            const idx = currentRuns.findIndex(r => r.id === runId);
+            if (idx !== -1) {
+              currentRuns[idx].status = 'Success';
+              currentRuns[idx].duration = `${Math.round((Date.now() - activeRuns[runId].startTime) / 1000)}s`;
+              currentRuns[idx].logs = activeRuns[runId].logs;
+              writeData(RUNS_FILE, currentRuns);
+            }
+          }
+        }).catch((err) => {
+          if (activeRuns[runId]) {
+            activeRuns[runId].status = 'Failed';
+            activeRuns[runId].logs.push(`[System Error] ${err.message}`);
+            const currentRuns = readData(RUNS_FILE);
+            const idx = currentRuns.findIndex(r => r.id === runId);
+            if (idx !== -1) {
+              currentRuns[idx].status = 'Failed';
+              currentRuns[idx].duration = `${Math.round((Date.now() - activeRuns[runId].startTime) / 1000)}s`;
+              currentRuns[idx].logs = activeRuns[runId].logs;
+              writeData(RUNS_FILE, currentRuns);
+            }
+          }
+        }));
+      });
+      console.log(`[Cron] Scheduled ${workflow.name} for ${expr}`);
+    } else {
+      console.warn(`[Cron] Invalid cron expression for ${workflow.name}: ${expr}`);
+    }
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`[Server] Stanley Enterprise server listening on port ${PORT}`);
+  
+  // Initialize existing schedules
+  const workflows = readData(WORKFLOWS_FILE);
+  workflows.forEach(w => scheduleWorkflow(w));
 });
