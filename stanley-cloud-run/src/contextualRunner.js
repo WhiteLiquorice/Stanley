@@ -1,6 +1,6 @@
-const { StanleyFoundationEnhanced } = require('../../../stanley-cloud-run/foundationAgent.enhanced.js');
-const { executeGraph } = require('../../../stanley-cloud-run/branchingEngine.js');
-const visionResolver = require('../../../stanley-cloud-run/visionResolver.js');
+const { StanleyFoundationEnhanced } = require('../foundationAgent.enhanced.js');
+const { executeGraph } = require('../branchingEngine.js');
+const visionResolver = require('../visionResolver.js');
 
 class WorkflowPausedForApproval extends Error {
   constructor(message, logs) {

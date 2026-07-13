@@ -5,7 +5,7 @@
  * isolated API is evaluated. When this directory is promoted, move/copy that
  * engine alongside this adapter and replace this relative import with './engine'.
  */
-const { resolveSecrets } = require('../../../stanley-cloud-run/secretsResolver.js');
+const { resolveSecrets } = require('../secretsResolver.js');
 const { runWorkflowWithContext, WorkflowPausedForApproval } = require('./contextualRunner');
 
 module.exports = { runWorkflowWithContext, WorkflowPausedForApproval, resolveSecrets };

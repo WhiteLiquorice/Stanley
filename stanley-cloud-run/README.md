@@ -31,10 +31,13 @@ authorize the broader recovery path.
 
 ## Deployment checklist
 
-Use the repository-level `GPT-Additions/DEPLOYMENT.md` guide. It builds this API
-with the existing browser engine and promotes it as a new revision of the
-existing `stanley-runner` service; it does not create a second permanent Cloud
-Run service.
+Use standard Cloud Run deployment commands from this directory. Build this API
+with the existing browser engine and promote it as a new revision of the
+existing `stanley-runner` (or `stanley-engine`) service:
+
+```bash
+gcloud run deploy stanley-engine --source . --region us-central1 --allow-unauthenticated --project=bridgeway-db29e
+```
 
 The promoted revision needs `STANLEY_PROJECT_ID`, the existing
 `RUNNER_INTERNAL_KEY` Secret Manager secret, exact Firebase Hosting origins in

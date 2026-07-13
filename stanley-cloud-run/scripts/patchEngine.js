@@ -3,7 +3,7 @@ const path = require('path');
 
 const checkOnly = process.argv.includes('--check');
 const targetArg = process.argv.slice(2).find((arg) => arg !== '--check');
-const target = targetArg || path.resolve(__dirname, '../../../stanley-cloud-run/branchingEngine.js');
+const target = targetArg || path.resolve(__dirname, '../branchingEngine.js');
 const before = `      } catch (err) {
         // Step failed after all retries! Let's become agentic upon failure!
         onLog(\`\${label} failed: "\${err.message}". Initiating Agentic Recovery...\`);`;
