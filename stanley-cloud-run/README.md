@@ -1,108 +1,57 @@
-# Stanley Headless Runner (Cloud Run)
+# Stanley Cloud API
 
-Runs Stanley workflows headless, in the cloud, with no local server or browser
-required. The web dashboard calls `POST /run` with the workflow + vault secrets;
-this service executes it with Playwright and returns the log lines.
+An isolated Cloud Run execution API. It removes the browser's ability to submit
+vault secrets and makes Firestore the source of truth for workflow execution.
 
-## How it relates to the desktop daemon
+Before execution, every workflow passes a deterministic contract check. This
+requires one mission and one trigger, validates graph references and context
+edges, caps agent steps, blocks custom code by default, and requires an explicit
+approval node directly before an outbound side effect. The model may propose the
+graph; only the validated graph may execute.
 
-These three files are **flat copies** of the desktop engine and must stay in sync
-if you change the originals:
+Automatic agentic recovery outside that graph is disabled by default in the
+container build. Explicit `agent`/`ai_agent` nodes still run with their bounded
+step limits. A workflow must set `executionPolicy.allowAgenticRecovery=true` to
+authorize the broader recovery path.
 
-| Cloud copy                       | Source of truth                          |
-|----------------------------------|------------------------------------------|
-| `foundationAgent.js`             | `../foundationAgent.js`                   |
-| `foundationAgent.enhanced.js`    | `../stanley-daemon/foundationAgent.enhanced.js` (require path changed to `./`) |
-| `branchingEngine.js`             | `../stanley-daemon/branchingEngine.js`    |
+## API contract
 
-The only behavioral difference is the browser launch: `cloudRunner.js` passes
-`channel: ''` so Playwright uses its **bundled Chromium** (the base agent now
-honors `config.channel`; desktop still defaults to the user's installed Chrome).
+`POST /v1/workflows/:workflowId/runs`
 
-## Deploy
+- Requires a Firebase ID token in `Authorization: Bearer <token>`.
+- Reads the workflow from `stanley_users/{uid}/workflows/{workflowId}`.
+- Resolves that user's vault on the server.
+- Persists the completed run in `stanley_users/{uid}/runs/{runId}`.
+- Body is optional: `{ "input": { ... } }` for workflow interpolation.
 
-Requires the `gcloud` CLI authenticated against the **bridgeway-db29e** project
-(where Stanley users + data live).
+`POST /v1/internal/workflows/:workflowId/runs`
 
-```bash
-cd stanley-cloud-run
-gcloud run deploy stanley-runner \
-  --source . \
-  --project bridgeway-db29e \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --memory 2Gi \
-  --cpu 1 \
-  --timeout 600 \
-  --max-instances 5
-```
+- For trusted schedulers and webhooks only.
+- Requires `X-Stanley-Internal-Key` and `{ "uid": "...", "input": { ... } }`.
 
-- `--allow-unauthenticated` is safe: the service does its own Firebase ID-token
-  + license check on every request. Cloud Run's IAM layer is not the gate.
-- `--memory 2Gi` is the practical floor for Chromium. Drop to scale-to-zero by
-  leaving `--min-instances` unset (default 0) — you only pay while a run executes.
+## Deployment checklist
 
-### Vision / AI (the neuro-symbolic execution layer)
+Use the repository-level `GPT-Additions/DEPLOYMENT.md` guide. It builds this API
+with the existing browser engine and promotes it as a new revision of the
+existing `stanley-runner` service; it does not create a second permanent Cloud
+Run service.
 
-`visionResolver.js` lets the runner fall back to Gemini vision when CSS + semantic
-locators miss, and powers `ai_prompt` nodes. It authenticates two ways:
+The promoted revision needs `STANLEY_PROJECT_ID`, the existing
+`RUNNER_INTERNAL_KEY` Secret Manager secret, exact Firebase Hosting origins in
+`ALLOWED_ORIGINS`, and the same Firestore and Vertex AI permissions as the
+current runner. Set the resulting service URL as `VITE_RUNNER_URL` during the
+frontend build.
 
-1. **ADC / Vertex AI (default, no keys)** — uses the Cloud Run service account.
-   Grant it the Vertex role once:
-   ```bash
-   PROJNUM=$(gcloud projects describe bridgeway-db29e --format='value(projectNumber)')
-   gcloud projects add-iam-policy-binding bridgeway-db29e \
-     --member="serviceAccount:${PROJNUM}-compute@developer.gserviceaccount.com" \
-     --role="roles/aiplatform.user"
-   ```
-   (Adjust the member if the service runs as a custom service account.)
+This can remain scale-to-zero before customers. The service URL stays available;
+Cloud Run may cold-start the first request, but no always-on instance is required.
 
-2. **API key override** — set `GEMINI_API_KEY` to use the Generative Language
-   endpoint instead (handy for local testing). When set, it takes precedence over ADC.
+Approvals are preflight gates: the run is persisted as `pending_approval` before
+browser work begins. Approval launches the full validated graph with approval
+nodes converted to deterministic no-ops; rejection cancels it. This avoids
+replaying side effects or pretending an in-memory browser can survive a pause.
 
-Vision is only called when tier-1 (CSS) and tier-2 (semantic) both miss, so most
-steps cost nothing extra.
+## Deliberate transition boundary
 
-After deploy, copy the service URL and set it as `VITE_RUNNER_URL` in the web
-app's build env (e.g. `.env` / Vercel project settings):
-
-```
-VITE_RUNNER_URL=https://stanley-runner-XXXXXXXX-uc.a.run.app
-```
-
-## Env vars (optional)
-
-| Var                 | Default                                                                 |
-|---------------------|-------------------------------------------------------------------------|
-| `STANLEY_PROJECT_ID`| `bridgeway-db29e`                                                       |
-| `ALLOWED_ORIGINS`   | `https://bridgeway-db29e.web.app,https://bridgeway-db29e.firebaseapp.com,http://localhost:5173` |
-| `PORT`              | `8080` (set by Cloud Run)                                              |
-| `VERTEX_LOCATION`   | `us-central1` (Vertex AI region for vision/ai_prompt)                  |
-| `VISION_MODEL`      | `gemini-2.5-flash`                                                     |
-| `GEMINI_API_KEY`    | _unset_ — if set, uses the Generative Language endpoint instead of ADC |
-| `RUNNER_INTERNAL_KEY` | _unset_ — shared secret for `POST /run-internal` (scheduler/webhook server-to-server). Set the SAME value as a Functions secret. |
-
-### Automated runs (`POST /run-internal`)
-
-For scheduler/webhook runs there is no user token. The scheduler dispatcher and
-webhook Cloud Functions call `POST /run-internal` with header
-`X-Stanley-Internal-Key: $RUNNER_INTERNAL_KEY` and body `{ uid, workflowId, input?, trigger? }`.
-The runner then loads the workflow, resolves vault secrets **server-side** (admin
-SDK), re-checks the license, runs headless, and saves the run to
-`stanley_users/{uid}/runs`. Trigger payloads are available to nodes via
-`{{input.field}}` (alias `{{trigger.field}}`).
-
-> **Sync note:** `branchingEngine.js` now contains the 3-tier resolution logic
-> (`smartClick`/`smartType`/`maybeVerify`/`interpolate`). It is kept byte-identical
-> with `../stanley-daemon/branchingEngine.js`. The extension's ESM copy
-> (`../stanley-extension/branchingEngine.js`) carries the same logic by hand.
-
-## Local test
-
-```bash
-npm install
-# Needs application-default creds with access to bridgeway-db29e:
-gcloud auth application-default login --project bridgeway-db29e
-npm start
-# → POST http://localhost:8080/run with a Bearer token + { workflow, secrets }
-```
+`src/runnerAdapter.js` temporarily reuses the current Cloud Run engine so that
+execution behavior is unchanged while the API boundary is proven. Promote the
+engine into this directory only after this API passes staging validation.
