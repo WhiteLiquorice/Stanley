@@ -116,7 +116,7 @@ export function Workspace() {
 
       // Call execution runner (Cloud Run headless API)
       // We pass the compiled workflow graph directly
-      const runPromise = runHeadless(compiledWf, secrets);
+      const runPromise = runHeadless(compiledWf as any, secrets);
 
       // We simulate step highlights while waiting for response
       const logSimulator = setInterval(() => {

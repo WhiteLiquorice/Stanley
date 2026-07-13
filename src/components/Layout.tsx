@@ -87,7 +87,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen w-screen font-sans overflow-hidden select-none" style={{ background: 'var(--bg-deep)', color: 'var(--text-primary)' }}>
       
       {/* Sidebar */}
-      <aside className="w-[240px] border-r flex flex-col justify-between p-4 shrink-0 z-20" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
+      <aside className="hidden md:flex w-[240px] border-r flex-col justify-between p-4 shrink-0 z-20" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
         <div className="flex flex-col gap-6">
           {/* Logo */}
           <div className="flex items-center gap-2.5 px-2 py-1.5 cursor-pointer" onClick={() => navigate('/dashboard')}>
@@ -258,6 +258,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
           {children}
         </main>
+
+        {/* Mobile Bottom Navigation */}
+        <nav className="md:hidden flex items-center justify-around border-t p-2 pb-safe shrink-0 z-50" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
+          {navItems.slice(0, 4).map((item) => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.name}
+                to={item.path}
+                className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors"
+                style={{ color: isActive ? 'var(--accent)' : 'var(--text-tertiary)' }}
+              >
+                <Icon size={20} />
+                <span className="text-[9px] font-semibold">{item.name}</span>
+              </Link>
+            );
+          })}
+          <Link
+            to="/dashboard/settings"
+            className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors"
+            style={{ color: location.pathname === '/dashboard/settings' ? 'var(--accent)' : 'var(--text-tertiary)' }}
+          >
+            <Settings size={20} />
+            <span className="text-[9px] font-semibold">Settings</span>
+          </Link>
+        </nav>
       </div>
 
       {/* Global Command Palette dialog */}

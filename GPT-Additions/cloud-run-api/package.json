@@ -1,0 +1,24 @@
+{
+  "name": "stanley-cloud-api",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloud-only execution API for Project Stanley",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/runnerAdapter.js && node --check src/contextualRunner.js && node --check src/dispatcher.js && node --check src/runLifecycle.js && node --check src/workflowContract.js && node --check scripts/patchEngine.js && node --check scripts/auditWorkflows.js",
+    "test": "node test/workflowContract.test.js && node test/runLifecycle.test.js",
+    "audit:workflows": "node scripts/auditWorkflows.js",
+    "check:engine-patch": "node scripts/patchEngine.js --check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@google-cloud/tasks": "^5.5.0",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.1.0",
+    "playwright": "1.42.1"
+  }
+}
