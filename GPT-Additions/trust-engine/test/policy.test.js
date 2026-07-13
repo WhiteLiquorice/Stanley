@@ -46,3 +46,17 @@ test('live side effects require an immediately preceding approval', () => {
   };
   assert.equal(validateTrustConfiguration(approved).valid, true);
 });
+
+test('ordinary browser interaction needs approval only when explicitly irreversible', () => {
+  const readOnly = {
+    trustPolicy: { mode: 'live' },
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'click', type: 'click', data: { description: 'Open details' } },
+    ],
+    edges: [{ source: 'trigger', target: 'click' }],
+  };
+  assert.equal(validateTrustConfiguration(readOnly).valid, true);
+  readOnly.nodes[1].data.sideEffect = true;
+  assert.equal(validateTrustConfiguration(readOnly).valid, false);
+});

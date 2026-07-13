@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": { "noEmit": true, "skipLibCheck": true },
+  "include": [
+    "../src/**/*.ts", "../src/**/*.tsx",
+    "connector-workbench/**/*.ts", "connector-workbench/**/*.tsx",
+    "exception-workbench/**/*.tsx", "trust-engine/web-client/**/*.ts",
+    "website-overlay/**/*.tsx", "operations-workbench/**/*.ts", "operations-workbench/**/*.tsx"
+  ]
+}

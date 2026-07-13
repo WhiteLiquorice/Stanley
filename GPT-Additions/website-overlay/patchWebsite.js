@@ -1,0 +1,12 @@
+const fs = require('fs');
+function patch(file, replacements) { let source = fs.readFileSync(file, 'utf8'); for (const [anchor, replacement] of replacements) { if (!source.includes(replacement) && !source.includes(anchor)) throw new Error(`Website anchor changed in ${file}: ${anchor}`); if (!source.includes(replacement)) source = source.replace(anchor, replacement); } fs.writeFileSync(file, source); }
+patch(process.argv[2] || 'src/App.tsx', [
+  ["import { CreditCard } from 'lucide-react';", "import { CreditCard } from 'lucide-react';\nimport { ConnectorWorkbench } from '../GPT-Additions/connector-workbench/ConnectorWorkbench';\nimport { ExceptionWorkbench } from '../GPT-Additions/exception-workbench/ExceptionWorkbench';\nimport { OperationsWorkbench } from '../GPT-Additions/operations-workbench/OperationsWorkbench';"],
+  ['        <Route path="/dashboard/settings" element={', '        <Route path="/dashboard/connectors" element={<ProtectedRoute><Layout><ConnectorWorkbench /></Layout></ProtectedRoute>} />\n        <Route path="/dashboard/exceptions" element={<ProtectedRoute><Layout><ExceptionWorkbench /></Layout></ProtectedRoute>} />\n        <Route path="/dashboard/operations" element={<ProtectedRoute><Layout><OperationsWorkbench /></Layout></ProtectedRoute>} />\n        <Route path="/dashboard/settings" element={'],
+]);
+patch(process.argv[3] || 'src/components/Layout.tsx', [
+  ["import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles } from 'lucide-react';", "import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles, Plug, ShieldAlert, BrainCircuit } from 'lucide-react';\nimport { ExceptionNavBadge } from '../../GPT-Additions/website-overlay/ExceptionNavBadge';"],
+  ["    { name: 'Credential Vault', path: '/dashboard/vault', icon: KeyRound },", "    { name: 'Credential Vault', path: '/dashboard/vault', icon: KeyRound },\n    { name: 'Operations', path: '/dashboard/operations', icon: BrainCircuit },\n    { name: 'Connectors', path: '/dashboard/connectors', icon: Plug },\n    { name: 'Exceptions', path: '/dashboard/exceptions', icon: ShieldAlert },"],
+  ['                  <span>{item.name}</span>', "                  <span>{item.name}</span>\n                  {item.name === 'Exceptions' && <ExceptionNavBadge />}"],
+]);
+console.log('Applied Connector and Exception website routes and navigation.');

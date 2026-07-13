@@ -1,0 +1,26 @@
+// Merge inside the existing Firestore `match /databases/{database}/documents` block.
+// Connector artifacts are server-only. The Cloud Run service uses Admin SDK and
+// is unaffected by client rules.
+match /stanley_users/{uid}/connectors/{connectorId} {
+  allow read, write: if false;
+  match /{document=**} {
+    allow read, write: if false;
+  }
+}
+
+match /stanley_users/{uid}/learning_cases/{caseId} {
+  allow read, write: if false;
+}
+
+match /stanley_users/{uid}/repair_proposals/{proposalId} {
+  allow read, write: if false;
+}
+
+match /stanley_users/{uid}/skills/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/orchestrations/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/learning_rollouts/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/memories/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/workflow_monitoring/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/monitoring_alerts/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/outcome_monitors/{document=**} { allow read, write: if false; }
+match /stanley_users/{uid}/workflows/{workflowId}/versions/{versionId} { allow read, write: if false; }

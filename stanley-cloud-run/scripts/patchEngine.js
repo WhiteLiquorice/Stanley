@@ -16,14 +16,17 @@ const after = `      } catch (err) {
         onLog(\`\${label} failed: "\${err.message}". Initiating Agentic Recovery...\`);`;
 
 const source = fs.readFileSync(target, 'utf8');
-if (source.includes(after)) {
+const usesCrlf = source.includes('\r\n');
+const normalizedSource = source.replace(/\r\n/g, '\n');
+if (normalizedSource.includes(after)) {
   console.log('Engine policy patch already applied.');
   process.exit(0);
 }
-if (!source.includes(before)) throw new Error('Engine recovery block changed; refusing to apply an unsafe fuzzy patch.');
+if (!normalizedSource.includes(before)) throw new Error('Engine recovery block changed; refusing to apply an unsafe fuzzy patch.');
 if (checkOnly) {
   console.log(`Engine policy patch is applicable to ${target}`);
   process.exit(0);
 }
-fs.writeFileSync(target, source.replace(before, after));
+const patched = normalizedSource.replace(before, after);
+fs.writeFileSync(target, usesCrlf ? patched.replace(/\n/g, '\r\n') : patched);
 console.log(`Applied constrained-recovery patch to ${target}`);

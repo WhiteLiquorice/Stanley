@@ -59,3 +59,19 @@ test('captures a failed node as an actionable exception', async () => {
   assert.equal(store.exceptions[0].kind, 'execution_failure');
   assert.equal(store.exceptions[0].summary, 'Portal unavailable');
 });
+
+test('turns completed nodes into zero-time waits when resuming', async () => {
+  const store = new MemoryStore();
+  const workflow = shadowWorkflow();
+  const { workflowFingerprint } = require('../src/resume');
+  const runtime = new TrustRuntime({
+    store, uid: 'user', runId: 'run', workflow,
+    resumeCheckpoint: {
+      id: 'cp', sequence: 3, nodeId: 'trigger', phase: 'after', resumable: true,
+      workflowFingerprint: workflowFingerprint(workflow),
+      state: { completedNodeIds: ['trigger'] },
+    },
+  });
+  assert.equal(runtime.workflow.nodes.find((node) => node.id === 'trigger').type, 'wait');
+  assert.equal(runtime.shouldSkip({ id: 'trigger' }), true);
+});

@@ -11,6 +11,7 @@ const {
   requiresPreflightApproval,
 } = require('./runLifecycle');
 const { createDispatcher } = require('./dispatcher');
+const { TrustStore, createTrustRouter, TrustRuntime } = require('./trust-engine');
 
 const projectId = process.env.STANLEY_PROJECT_ID || 'bridgeway-db29e';
 const internalKey = process.env.RUNNER_INTERNAL_KEY || '';
@@ -21,6 +22,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 const runs = new RunStore(db);
+const trustStore = new TrustStore(db);
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -111,22 +113,83 @@ async function executeRun(uid, runId) {
     logs: [...(run.logs || []), '[System] Execution started.'],
   });
 
+  let trust = null;
+  let preparedWorkflow = executableWorkflow;
+  try {
+    let resumeCheckpoint = null;
+    if (run.resumeCheckpointId && run.resumeFromRunId) {
+      const checkpointSnap = await db.collection('stanley_users').doc(uid)
+        .collection('runs').doc(run.resumeFromRunId)
+        .collection('checkpoints').doc(run.resumeCheckpointId).get();
+      if (checkpointSnap.exists) {
+        resumeCheckpoint = { id: checkpointSnap.id, ...checkpointSnap.data() };
+      }
+    }
+
+    trust = new TrustRuntime({
+      store: trustStore,
+      uid,
+      runId,
+      workflow: executableWorkflow,
+      overrides: { mode: run.trustMode || 'live' },
+      resumeCheckpoint,
+    });
+
+    const prepared = await trust.begin(run.input || {});
+    preparedWorkflow = prepared.workflow;
+  } catch (trustError) {
+    console.error('Trust runtime initialization failed:', trustError);
+    run = await runs.patch(uid, runId, {
+      state: 'failed',
+      success: false,
+      completedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      duration: '0s',
+      error: trustError.message || 'Trust Configuration Error',
+      logs: [...(run.logs || []), `[Trust] Configuration failed: ${trustError.message}`],
+    });
+    return publicRun(run);
+  }
+
   try {
     const secrets = await resolveSecrets(db, uid);
-    const result = await runWorkflowWithContext(executableWorkflow, secrets, run.input || {}, { db, uid, runId, policy });
+    const result = await runWorkflowWithContext(preparedWorkflow, secrets, run.input || {}, {
+      db,
+      uid,
+      runId,
+      policy,
+      trust,
+      scraped: run.scraped || {},
+    });
+
+    let trustReport = {};
+    if (trust) {
+      trustReport = await trust.finish({
+        input: run.input || {},
+        scraped: result.scraped || {},
+        run,
+      });
+    }
+
     const latest = await runs.get(uid, runId);
     const cancelRequested = latest?.state === 'cancel_requested';
+    const runSuccess = !cancelRequested && (trust ? trustReport.verified : true);
+
     run = await runs.patch(uid, runId, {
-      state: cancelRequested ? 'cancelled' : 'completed',
-      success: !cancelRequested,
+      state: cancelRequested ? 'cancelled' : (runSuccess ? 'completed' : 'failed'),
+      success: runSuccess,
       completedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAtMs,
       duration: `${Math.round((Date.now() - startedAtMs) / 1000)}s`,
       logs: result.logs || [],
       scraped: result.scraped || {},
+      trustReport,
     });
     return publicRun(run);
   } catch (error) {
+    if (trust) {
+      await trust.runFailed(error).catch(() => {});
+    }
     const attempts = Number(run.attempts || 1);
     const canRetry = policy.retrySafe && attempts < policy.maxRunAttempts;
     run = await runs.patch(uid, runId, {
@@ -155,6 +218,49 @@ async function submitRun(uid, workflowId, options) {
 
 app.get('/', (_req, res) => res.status(200).send('Stanley cloud runner OK'));
 app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
+
+async function retryFromLatestCheckpoint({ uid, exceptionId, body }) {
+  const exception = await trustStore.getException(uid, exceptionId);
+  if (!exception) throw httpError(404, 'Exception not found.');
+  if (exception.state === 'resolved') throw httpError(409, 'Exception is already resolved.');
+
+  const failedRunId = exception.runId;
+  const failedRun = await runs.get(uid, failedRunId);
+  if (!failedRun) throw httpError(404, 'Failed run not found.');
+
+  const latestCheckpoint = await trustStore.latestCheckpoint(uid, failedRunId);
+  if (!latestCheckpoint) throw httpError(400, 'No checkpoint found to retry.');
+
+  // Resolve the exception
+  await trustStore.resolveException(uid, exceptionId, { state: 'resolved', action: 'retried' });
+
+  // Create a new run
+  const newRun = await createRun(uid, failedRun.workflowId, {
+    input: failedRun.input || {},
+    trigger: 'Checkpoint Retry',
+  });
+
+  // Associate the checkpoint
+  await runs.patch(uid, newRun.id, {
+    resumeFromRunId: failedRunId,
+    resumeCheckpointId: latestCheckpoint.id,
+    scraped: failedRun.scraped || {},
+  });
+
+  // Dispatch the new run
+  const dispatched = await dispatcher.dispatch(uid, newRun.id);
+  const finalRun = dispatcher.mode === 'inline' ? dispatched : await runs.get(uid, newRun.id);
+
+  return { runId: finalRun.id };
+}
+
+app.use(createTrustRouter({
+  express,
+  authenticateUser,
+  store: trustStore,
+  onRetry: retryFromLatestCheckpoint,
+  handleError: errorResponse,
+}));
 
 app.post('/v1/workflows/:workflowId/runs', async (req, res) => {
   try {

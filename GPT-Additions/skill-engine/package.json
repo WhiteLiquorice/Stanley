@@ -1,0 +1,12 @@
+{
+  "name": "stanley-skill-engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "check": "node --check src/artifact.js && node --check src/selector.js && node --check src/executor.js && node --check src/store.js && node --check src/service.js && node --check src/skillRoutes.js && node --check src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" }
+}

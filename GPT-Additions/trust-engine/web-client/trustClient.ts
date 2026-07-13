@@ -1,4 +1,4 @@
-import { getFreshIdToken } from './firebaseAuth';
+import { getFreshIdToken } from '../../../src/lib/firebaseAuth';
 
 export type TrustExceptionState = 'open' | 'resolved' | 'dismissed';
 

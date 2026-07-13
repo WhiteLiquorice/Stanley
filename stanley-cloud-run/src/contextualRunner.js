@@ -20,7 +20,7 @@ function createEngineDb(db, uid) {
   };
 }
 
-async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog } = {}) {
+async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog, trust, scraped: initialScraped } = {}) {
   const logs = [];
   const onLog = (line) => {
     logs.push(line);
@@ -65,6 +65,8 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
       runId,
       allowAgenticRecovery: policy.allowAgenticRecovery === true,
       maxSteps: 1000,
+      trust,
+      scraped: initialScraped,
       onSelfHealed: async (nodeId, healedSelector) => {
         if (!db || !uid || !workflow.id) return;
         const ref = db.collection('stanley_users').doc(uid).collection('workflows').doc(workflow.id);

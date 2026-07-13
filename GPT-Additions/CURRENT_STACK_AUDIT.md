@@ -1,22 +1,23 @@
 # Current stack audit
 
-Observed against commit `96feb53` before Trust Engine work began.
+Initially observed against commit `96feb53`, then rechecked after the local
+consolidation repairs.
 
-The commit moved the prior cloud API into `stanley-cloud-run/src`, but also
-deleted the execution engine files it still imports:
+## Rectified
 
-- `stanley-cloud-run/branchingEngine.js`
-- `stanley-cloud-run/foundationAgent.enhanced.js`
-- `stanley-cloud-run/secretsResolver.js`
-- `stanley-cloud-run/visionResolver.js`
-- `stanley-cloud-run/apiResolver.js`
-- `stanley-cloud-run/pythonExecutor.js`
+- The deleted engine and resolver files have been restored.
+- `src/contextualRunner.js` and `src/runnerAdapter.js` now resolve local files.
+- The Dockerfile is self-contained when `stanley-cloud-run` is its build context.
+- The API contract and lifecycle tests pass.
 
-`src/contextualRunner.js` and `src/runnerAdapter.js` currently use relative paths
-that resolve outside the Stanley repository after consolidation. The Dockerfile
-also still copies from the deleted `GPT-Additions/cloud-run-api` directory and
-tries to patch the deleted `branchingEngine.js`.
+## Corrected and verified
 
-As a result, the current consolidated Cloud Run image cannot build from this
-checkout. Repair this migration boundary before promoting either the existing
-API or the Trust Engine. No production file was altered as part of this audit.
+- The two vision fallback callbacks now use `async () => ...`, so the execution
+  engine parses and the runtime adapter loads.
+- `scripts/patchEngine.js` normalizes line endings for matching and preserves the
+  source file's original line-ending style when writing.
+- Syntax checks, recovery-patch validation, API tests, and runtime module loading
+  all pass.
+
+The only production changes made during this audit were those two explicitly
+authorized corrections.
