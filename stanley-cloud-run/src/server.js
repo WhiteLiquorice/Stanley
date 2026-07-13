@@ -11,7 +11,16 @@ const {
   requiresPreflightApproval,
 } = require('./runLifecycle');
 const { createDispatcher } = require('./dispatcher');
-const { TrustStore, createTrustRouter, TrustRuntime } = require('./trust-engine');
+const { installConnectorOverlay } = require('./runner-integration/src/connectorServerOverlay');
+const { installSkillOverlay } = require('./runner-integration/src/skillExecution');
+const { installOrchestrationOverlay } = require('./runner-integration/src/orchestrationExecution');
+const { installLearningOverlay } = require('./runner-integration/src/learningExecution');
+const { installMemoryOverlay } = require('./runner-integration/src/memoryExecution');
+const { installMonitoringOverlay } = require('./runner-integration/src/monitoringExecution');
+const { executeTrustedWorkflow } = require('./runner-integration/src/trustedExecution');
+const { createTrustRouter } = require('./trust-engine');
+const { callConnectorModel } = require('./vertexConnectorModel');
+const { proposeRepairOperations } = require('./vertexLearningModel');
 
 const projectId = process.env.STANLEY_PROJECT_ID || 'bridgeway-db29e';
 const internalKey = process.env.RUNNER_INTERNAL_KEY || '';
@@ -22,7 +31,6 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 const runs = new RunStore(db);
-const trustStore = new TrustStore(db);
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -97,6 +105,26 @@ async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idem
   });
 }
 
+const connectorOverlay = installConnectorOverlay({
+  app, db, authenticateUser, resolveAllSecrets: resolveSecrets,
+  callModel: callConnectorModel,
+  logger: (event) => console.log(JSON.stringify({ component: 'connector-engine', ...event })),
+});
+
+const skillOverlay = installSkillOverlay({
+  app, db, authenticateUser, runWorkflow: runWorkflowWithContext,
+  trustStore: connectorOverlay.trustStore, resolveAllSecrets: resolveSecrets,
+});
+
+const orchestrationOverlay = installOrchestrationOverlay({
+  app, db, authenticateUser, authenticateInternal,
+  dispatch: async (uid, runId) => { await runs.patch(uid, runId, { state: 'queued', wait: null, logs: ['[System] Durable wait satisfied; run queued to resume.'] }); return dispatcher.dispatch(uid, runId); },
+});
+
+const learningOverlay = installLearningOverlay({ app, express, db, authenticateUser, proposeOperations: proposeRepairOperations });
+const memoryOverlay = installMemoryOverlay({ app, express, db, authenticateUser });
+const monitoringOverlay = installMonitoringOverlay({ app, express, db, authenticateUser, authenticateInternal, connectorService: connectorOverlay.service, resolveAllSecrets: resolveSecrets, trustStore: connectorOverlay.trustStore });
+
 async function executeRun(uid, runId) {
   let run = await runs.get(uid, runId);
   if (!run) throw httpError(404, 'Run not found.');
@@ -104,7 +132,7 @@ async function executeRun(uid, runId) {
 
   const workflow = await loadWorkflow(uid, run.workflowId);
   const { policy } = validateWorkflow(workflow);
-  const executableWorkflow = prepareApprovedWorkflow(workflow, Boolean(run.approvedAt));
+  let executableWorkflow = prepareApprovedWorkflow(workflow, Boolean(run.approvedAt));
   const startedAtMs = Date.now();
   run = await runs.patch(uid, runId, {
     state: 'running',
@@ -113,85 +141,75 @@ async function executeRun(uid, runId) {
     logs: [...(run.logs || []), '[System] Execution started.'],
   });
 
-  let trust = null;
-  let preparedWorkflow = executableWorkflow;
-  try {
-    let resumeCheckpoint = null;
-    if (run.resumeCheckpointId && run.resumeFromRunId) {
-      const checkpointSnap = await db.collection('stanley_users').doc(uid)
-        .collection('runs').doc(run.resumeFromRunId)
-        .collection('checkpoints').doc(run.resumeCheckpointId).get();
-      if (checkpointSnap.exists) {
-        resumeCheckpoint = { id: checkpointSnap.id, ...checkpointSnap.data() };
-      }
-    }
-
-    trust = new TrustRuntime({
-      store: trustStore,
-      uid,
-      runId,
-      workflow: executableWorkflow,
-      overrides: { mode: run.trustMode || 'live' },
-      resumeCheckpoint,
-    });
-
-    const prepared = await trust.begin(run.input || {});
-    preparedWorkflow = prepared.workflow;
-  } catch (trustError) {
-    console.error('Trust runtime initialization failed:', trustError);
-    run = await runs.patch(uid, runId, {
-      state: 'failed',
-      success: false,
-      completedAt: new Date().toISOString(),
-      durationMs: Date.now() - startedAtMs,
-      duration: '0s',
-      error: trustError.message || 'Trust Configuration Error',
-      logs: [...(run.logs || []), `[Trust] Configuration failed: ${trustError.message}`],
-    });
-    return publicRun(run);
-  }
-
+  let orchestration = null;
+  let learningRollout = null;
+  let memoryIds = [];
   try {
     const secrets = await resolveSecrets(db, uid);
-    const result = await runWorkflowWithContext(preparedWorkflow, secrets, run.input || {}, {
-      db,
-      uid,
-      runId,
-      policy,
-      trust,
-      scraped: run.scraped || {},
-    });
-
-    let trustReport = {};
-    if (trust) {
-      trustReport = await trust.finish({
-        input: run.input || {},
-        scraped: result.scraped || {},
-        run,
+    monitoringOverlay.assertAllowed(executableWorkflow);
+    const learningSelection = await learningOverlay.candidateForRun(uid, executableWorkflow, runId);
+    executableWorkflow = learningSelection.workflow; learningRollout = learningSelection.rollout;
+    const memorySelection = await memoryOverlay.prepareWorkflow(uid, executableWorkflow);
+    executableWorkflow = memorySelection.workflow; memoryIds = memorySelection.memoryIds;
+    orchestration = await orchestrationOverlay.runtimeFor({ uid, runId, workflow: executableWorkflow });
+    let skillAttempt;
+    try {
+      skillAttempt = await skillOverlay.executeBeforeWorkflow({ uid, runId, workflow: executableWorkflow, input: run.input || {}, secrets, mode: executableWorkflow.trustPolicy?.mode || 'live', orchestration });
+    } catch (skillError) {
+      if (!skillError.safeToFallback) throw skillError;
+      skillAttempt = { executed: false, safeToFallback: true, error: skillError.message };
+    }
+    let result;
+    if (skillAttempt.executed) {
+      result = {
+        logs: [`[Skill] Executed ${skillAttempt.skillId}@${skillAttempt.version} with no model calls.`],
+        scraped: skillAttempt.output || {}, trustReport: skillAttempt.trustReport,
+        trustState: 'verified', trustMode: executableWorkflow.trustPolicy?.mode || 'live',
+        skillExecution: { skillId: skillAttempt.skillId, version: skillAttempt.version, selection: skillAttempt.selection, modelCallsSaved: skillAttempt.modelCallsSaved },
+      };
+    } else {
+      result = await executeTrustedWorkflow({
+        store: connectorOverlay.trustStore, uid, runId, workflow: executableWorkflow,
+        secrets, input: run.input || {}, runRecord: run, runner: runWorkflowWithContext,
+        runnerOptions: { db, uid, runId, policy, connectorRuntime: connectorOverlay.connectorRuntime, orchestration },
+        trustMode: executableWorkflow.trustPolicy?.mode || 'live',
+        resumeCheckpoint: run.resumeCheckpoint || null,
       });
     }
-
     const latest = await runs.get(uid, runId);
     const cancelRequested = latest?.state === 'cancel_requested';
-    const runSuccess = !cancelRequested && (trust ? trustReport.verified : true);
-
+    if (cancelRequested) await orchestrationOverlay.coordinator.cancelRun(uid, runId);
+    else await orchestrationOverlay.coordinator.completeRun(uid, runId);
+    if (learningRollout) await learningOverlay.recordOutcome(uid, learningRollout.id, { success: !cancelRequested, runId });
+    if (memoryIds.length) await memoryOverlay.recordOutcome(uid, memoryIds, !cancelRequested);
+    await monitoringOverlay.record(uid, { workflowId: executableWorkflow.id, runId, success: !cancelRequested, verified: result.trustState !== 'needs_attention', durationMs: Date.now() - startedAtMs, costMicros: Number(result.executionCostMicros || 0), modelCalls: Number(result.modelCalls || 0), component: result.skillExecution ? { type: 'skill', ...result.skillExecution } : null });
     run = await runs.patch(uid, runId, {
-      state: cancelRequested ? 'cancelled' : (runSuccess ? 'completed' : 'failed'),
-      success: runSuccess,
+      state: cancelRequested ? 'cancelled' : 'completed',
+      success: !cancelRequested,
       completedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAtMs,
       duration: `${Math.round((Date.now() - startedAtMs) / 1000)}s`,
       logs: result.logs || [],
       scraped: result.scraped || {},
-      trustReport,
+      trustState: result.trustState,
+      trustMode: result.trustMode,
+      trustReport: result.trustReport,
+      skillExecution: result.skillExecution || null,
     });
     return publicRun(run);
   } catch (error) {
-    if (trust) {
-      await trust.runFailed(error).catch(() => {});
+    if (error?.code === 'WORKFLOW_SUSPENDED') {
+      const wait = { ...(error.wait || {}) }; delete wait.tokenHash;
+      run = await runs.patch(uid, runId, { state: 'waiting', success: false, wait, logs: error.logs || [`[System] Waiting for ${wait.type || 'external event'}.`] });
+      return publicRun(run);
     }
+    if (orchestration) await orchestrationOverlay.coordinator.failRun(uid, runId, error).catch((orchestrationError) => console.error('[Orchestration] Failure finalization error:', orchestrationError));
+    if (learningRollout) await learningOverlay.recordOutcome(uid, learningRollout.id, { success: false, runId, code: error.code }).catch((learningError) => console.error('[Learning] Rollout outcome error:', learningError));
+    if (memoryIds.length) await memoryOverlay.recordOutcome(uid, memoryIds, false).catch((memoryError) => console.error('[Memory] Outcome error:', memoryError));
+    await monitoringOverlay.record(uid, { workflowId: executableWorkflow.id, runId, success: false, verified: false, durationMs: Date.now() - startedAtMs, costMicros: Number(error.costMicros || 0), modelCalls: Number(error.modelCalls || 0), component: error.component || null }).catch((monitoringError) => console.error('[Monitoring] Outcome error:', monitoringError));
+    await learningOverlay.observeFailure(uid, { workflowId: executableWorkflow.id, runId, nodeId: error.nodeId || null, nodeType: error.nodeType || null, error, url: error.url || '', nodeData: error.nodeData || null }).catch((learningError) => console.error('[Learning] Failure capture error:', learningError));
     const attempts = Number(run.attempts || 1);
-    const canRetry = policy.retrySafe && attempts < policy.maxRunAttempts;
+    const canRetry = !orchestration && policy.retrySafe && attempts < policy.maxRunAttempts;
     run = await runs.patch(uid, runId, {
       state: canRetry ? 'retrying' : 'failed',
       success: false,
@@ -208,6 +226,21 @@ async function executeRun(uid, runId) {
 
 const dispatcher = createDispatcher({ projectId, inlineExecutor: executeRun });
 
+app.use(createTrustRouter({
+  express, authenticateUser, store: connectorOverlay.trustStore,
+  onRetry: async ({ uid, exceptionId }) => {
+    const exception = await connectorOverlay.trustStore.getException(uid, exceptionId);
+    if (!exception) throw httpError(404, 'Exception not found.');
+    const checkpoint = await connectorOverlay.trustStore.latestCheckpoint(uid, exception.runId);
+    if (!checkpoint?.resumable) throw httpError(409, 'No safe resumable checkpoint is available.');
+    let retry = await createRun(uid, exception.workflowId, { trigger: 'Safe retry', idempotencyKey: `trust-retry:${exceptionId}:${checkpoint.id}` });
+    retry = await runs.patch(uid, retry.id, { resumeCheckpoint: checkpoint, retryOfRunId: exception.runId, retryOfExceptionId: exceptionId });
+    if (retry.state !== 'pending_approval') await dispatcher.dispatch(uid, retry.id);
+    return { runId: retry.id, state: retry.state };
+  },
+  handleError: errorResponse,
+}));
+
 async function submitRun(uid, workflowId, options) {
   const run = await createRun(uid, workflowId, options);
   if (run.duplicate || run.state === 'pending_approval') return publicRun(run);
@@ -218,49 +251,6 @@ async function submitRun(uid, workflowId, options) {
 
 app.get('/', (_req, res) => res.status(200).send('Stanley cloud runner OK'));
 app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
-
-async function retryFromLatestCheckpoint({ uid, exceptionId, body }) {
-  const exception = await trustStore.getException(uid, exceptionId);
-  if (!exception) throw httpError(404, 'Exception not found.');
-  if (exception.state === 'resolved') throw httpError(409, 'Exception is already resolved.');
-
-  const failedRunId = exception.runId;
-  const failedRun = await runs.get(uid, failedRunId);
-  if (!failedRun) throw httpError(404, 'Failed run not found.');
-
-  const latestCheckpoint = await trustStore.latestCheckpoint(uid, failedRunId);
-  if (!latestCheckpoint) throw httpError(400, 'No checkpoint found to retry.');
-
-  // Resolve the exception
-  await trustStore.resolveException(uid, exceptionId, { state: 'resolved', action: 'retried' });
-
-  // Create a new run
-  const newRun = await createRun(uid, failedRun.workflowId, {
-    input: failedRun.input || {},
-    trigger: 'Checkpoint Retry',
-  });
-
-  // Associate the checkpoint
-  await runs.patch(uid, newRun.id, {
-    resumeFromRunId: failedRunId,
-    resumeCheckpointId: latestCheckpoint.id,
-    scraped: failedRun.scraped || {},
-  });
-
-  // Dispatch the new run
-  const dispatched = await dispatcher.dispatch(uid, newRun.id);
-  const finalRun = dispatcher.mode === 'inline' ? dispatched : await runs.get(uid, newRun.id);
-
-  return { runId: finalRun.id };
-}
-
-app.use(createTrustRouter({
-  express,
-  authenticateUser,
-  store: trustStore,
-  onRetry: retryFromLatestCheckpoint,
-  handleError: errorResponse,
-}));
 
 app.post('/v1/workflows/:workflowId/runs', async (req, res) => {
   try {

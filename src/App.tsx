@@ -13,6 +13,9 @@ import { Landing } from './views/Landing';
 import { AdStaging } from './views/AdStaging';
 import { isLoggedIn, getFreshIdToken, signOut } from './lib/firebaseAuth';
 import { CreditCard } from 'lucide-react';
+import { ConnectorWorkbench } from '../GPT-Additions/connector-workbench/ConnectorWorkbench';
+import { ExceptionWorkbench } from '../GPT-Additions/exception-workbench/ExceptionWorkbench';
+import { OperationsWorkbench } from '../GPT-Additions/operations-workbench/OperationsWorkbench';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // 'denied' redirects to login; otherwise render optimistically while we refresh
@@ -68,6 +71,9 @@ function App() {
         <Route path="/dashboard/results" element={<ProtectedRoute><Layout><Results /></Layout></ProtectedRoute>} />
         <Route path="/dashboard/guide" element={<ProtectedRoute><Layout><Guide /></Layout></ProtectedRoute>} />
         <Route path="/dashboard/templates" element={<ProtectedRoute><Layout><Templates /></Layout></ProtectedRoute>} />
+        <Route path="/dashboard/connectors" element={<ProtectedRoute><Layout><ConnectorWorkbench /></Layout></ProtectedRoute>} />
+        <Route path="/dashboard/exceptions" element={<ProtectedRoute><Layout><ExceptionWorkbench /></Layout></ProtectedRoute>} />
+        <Route path="/dashboard/operations" element={<ProtectedRoute><Layout><OperationsWorkbench /></Layout></ProtectedRoute>} />
         <Route path="/dashboard/settings" element={
           <ProtectedRoute>
             <Layout>

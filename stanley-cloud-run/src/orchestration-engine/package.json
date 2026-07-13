@@ -1,0 +1,9 @@
+{
+  "name": "stanley-orchestration-engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": { "check": "node --check src/stateMachine.js && node --check src/store.js && node --check src/coordinator.js && node --check src/index.js", "test": "node --test test/*.test.js" },
+  "engines": { "node": ">=20" }
+}

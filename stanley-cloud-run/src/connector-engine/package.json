@@ -1,0 +1,13 @@
+{
+  "name": "stanley-connector-engine",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Tenant-scoped, inspected and deterministic connector artifacts for Stanley",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "check": "node --check src/artifact.js && node --check src/connectorExecutor.js && node --check src/connectorRoutes.js && node --check src/connectorService.js && node --check src/connectorStore.js && node --check src/generation.js && node --check src/lifecycle.js && node --check src/pythonInspector.js && node --check src/redaction.js && node --check src/regression.js && node --check src/repair.js && node --check src/schemaValidator.js && node --check src/universal.js && node --check src/integrationRuntime.js && node --check src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" }
+}

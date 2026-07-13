@@ -52,6 +52,13 @@ interface NodeData {
   prompt?: string;
   system?: string;
   code?: string;
+  eventType?: string;
+  at?: string;
+  context?: string;
+  requiredEvents?: number | string;
+  timeoutMs?: number | string;
+  email?: string;
+  [key: string]: any;
 }
 
 interface WorkflowNode {
@@ -519,6 +526,9 @@ export function EditorInner() {
     // Choose starting template properties
     let nodeData: NodeData = {};
     if (type === 'wait') nodeData = { ms: '1000' };
+    else if (type === 'wait_for_event') nodeData = { eventType: 'webhook', requiredEvents: 1, timeoutMs: 86400000 };
+    else if (type === 'wait_until') nodeData = { at: new Date(Date.now() + 3600000).toISOString() };
+    else if (type === 'approval') nodeData = { context: '', email: '', timeoutMs: 86400000 };
     else if (type === 'trigger') nodeData = { url: 'https://' };
     else if (type === 'navigate') nodeData = { url: 'https://' };
     else if (type === 'if' || type === 'condition') nodeData = { condition: { type: 'always' } };
@@ -534,6 +544,9 @@ export function EditorInner() {
       click: 'Click Element',
       type: 'Type Value',
       wait: 'Delay Timer',
+      wait_for_event: 'Wait for Event',
+      wait_until: 'Wait Until',
+      approval: 'Human Approval',
       scrape: 'Scrape Text',
       open_tab: 'Open New Tab',
       switch_tab: 'Switch Tab',
@@ -742,6 +755,9 @@ export function EditorInner() {
             <button className="node-item btn-node" onClick={() => addNode('goto')}><ArrowRight size={14}/> Goto Label</button>
             <button className="node-item btn-node" onClick={() => addNode('label')}><Bookmark size={14}/> Label Anchor</button>
             <button className="node-item btn-node" onClick={() => addNode('wait')}><Clock size={14}/> Delay Timer</button>
+            <button className="node-item btn-node" onClick={() => addNode('wait_for_event')}><Clock size={14}/> Wait for Event</button>
+            <button className="node-item btn-node" onClick={() => addNode('wait_until')}><Clock size={14}/> Wait Until</button>
+            <button className="node-item btn-node" onClick={() => addNode('approval')}><Clock size={14}/> Human Approval</button>
           </div>
           <div className="sidebar-section">
             <h3>AI & Scripting</h3>
@@ -859,6 +875,10 @@ export function EditorInner() {
                     />
                   </div>
                 )}
+
+                {currentNode.data.type === 'wait_for_event' && (<><div className="form-group"><label>Event Type</label><select className="form-input" value={currentNode.data.data?.eventType || 'webhook'} onChange={(e) => updateNodeDataField('eventType', e.target.value)}><option value="webhook">Webhook</option><option value="reply">Reply</option><option value="file">File</option><option value="external_state">External state</option></select></div><div className="form-group"><label>Required Events</label><input type="number" min="1" max="100" className="form-input" value={currentNode.data.data?.requiredEvents || 1} onChange={(e) => updateNodeDataField('requiredEvents', Number(e.target.value))}/></div><div className="form-group"><label>Timeout (ms)</label><input type="number" className="form-input" value={currentNode.data.data?.timeoutMs || 86400000} onChange={(e) => updateNodeDataField('timeoutMs', Number(e.target.value))}/></div></>)}
+                {currentNode.data.type === 'wait_until' && (<div className="form-group"><label>Resume At</label><input type="datetime-local" className="form-input" value={String(currentNode.data.data?.at || '').slice(0,16)} onChange={(e) => updateNodeDataField('at', new Date(e.target.value).toISOString())}/></div>)}
+                {currentNode.data.type === 'approval' && (<><div className="form-group"><label>Approval Context</label><textarea className="form-input" value={currentNode.data.data?.context || ''} onChange={(e) => updateNodeDataField('context', e.target.value)}/></div><div className="form-group"><label>Approver Email</label><input className="form-input" value={currentNode.data.data?.email || ''} onChange={(e) => updateNodeDataField('email', e.target.value)}/></div></>)}
 
                 {currentNode.data.type === 'open_tab' && (
                   <>

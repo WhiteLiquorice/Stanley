@@ -106,7 +106,7 @@ async function executeGraph(agent, workflow, opts = {}) {
     || (workflow.nodes || []).find(isFlowNode);
   if (!current) throw new Error('Workflow has no nodes to execute.');
 
-  const scraped = opts.scraped || {};
+  const scraped = {};
   const ctx = { agent, lastError: null, lastScrape: '', lastConditionResult: null, missionPrompt, stepParams: {}, input, onSelfHealed: opts.onSelfHealed, data: {} };
   let steps = 0;
 
@@ -126,6 +126,14 @@ async function executeGraph(agent, workflow, opts = {}) {
       ? { ...current, data: { ...(current.data || {}), ...params } }
       : current;
 
+    if (opts.orchestration && typeof opts.orchestration.beforeNode === 'function') {
+      await opts.orchestration.beforeNode(effectiveNode, ctx);
+    }
+
+    if (opts.trust && typeof opts.trust.beforeNode === 'function') {
+      await opts.trust.beforeNode(effectiveNode, ctx);
+    }
+
     const goal = effectiveNode.data?.description || ctx.missionPrompt || `Locate and perform action on the page.`;
     const url = agent.page ? agent.page.url() : '';
     
@@ -141,137 +149,114 @@ async function executeGraph(agent, workflow, opts = {}) {
     const scriptHash = crypto.createHash('md5').update(goal + normalizedUrl).digest('hex');
     let usedCachedApi = false;
 
-    if (opts.trust?.shouldSkip(effectiveNode)) {
-      onLog(`${label} Restored from durable checkpoint.`);
-    } else {
-      if (opts.trust) {
-        await opts.trust.beforeNode(effectiveNode, ctx);
+    // Connector Engine: approved tenant artifacts run before browser execution.
+    if (opts.connectorRuntime && url && url !== 'about:blank' && effectiveNode.type !== 'navigate' && effectiveNode.type !== 'trigger') {
+      const connector = await opts.connectorRuntime.executeForNode({
+        uid: opts.uid, runId: opts.runId, workflowId: workflow.id, node: effectiveNode,
+        goal, url, input: { ...ctx.variables, ...ctx.stepParams },
+        approval: opts.connectorApproval, trustMode: opts.trust?.policy?.mode || 'live',
+      });
+      if (connector.executed) {
+        scraped[effectiveNode.id] = connector.result;
+        ctx.lastScrape = typeof connector.result === 'string' ? connector.result : JSON.stringify(connector.result);
+        usedCachedApi = true;
+        ctx.lastError = null;
+        onLog(`${label} Executed approved connector ${connector.connectorId}@${connector.version}.`);
       }
+    }
+
+    if (!usedCachedApi) {
       try {
-        // 1. Pre-Execution Cache Check: Did another user already auto-generate a Python API script for this?
-        if (opts.db && url && url !== 'about:blank' && effectiveNode.type !== 'navigate' && effectiveNode.type !== 'trigger') {
-          try {
-            const cachedDoc = await opts.db.collection('global_api_scripts').doc(scriptHash).get();
-            if (cachedDoc.exists) {
-              onLog(`${label} Found cached global Python API script for goal. Bypassing browser...`);
-              const cachedScript = cachedDoc.data().code;
-              const apiResult = await executePythonScript(cachedScript, onLog);
-              scraped[effectiveNode.id] = apiResult;
-              ctx.lastScrape = typeof apiResult === 'string' ? apiResult : JSON.stringify(apiResult);
-              usedCachedApi = true;
-              ctx.lastError = null;
-            }
-          } catch (cacheErr) {
-            onLog(`[Cache Error] ${cacheErr.message}`);
-          }
+        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent'];
+        if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type)) {
+          await opts.ensureBrowser();
         }
 
+        const retryableNodes = ['click', 'type', 'navigate', 'scrape', 'extract', 'extract_list'];
+        const maxRetries = retryableNodes.includes(effectiveNode.type) ? 3 : 1;
+        let lastErr;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            await runGraphNode(agent, effectiveNode, { onLog, secrets, scraped, ctx, label, visionResolver });
+            lastErr = null;
+            break;
+          } catch (attemptErr) {
+            lastErr = attemptErr;
+            if (attempt < maxRetries) {
+              const delayMs = 1000 * Math.pow(2, attempt - 1);
+              onLog(`${label} [Retry ${attempt}/${maxRetries}] Failed: "${attemptErr.message}". Retrying after ${delayMs}ms…`);
+              await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
+      } catch (err) {
+        if (opts.allowAgenticRecovery !== true) {
+          onLog(`${label} failed: "${err.message}". Recovery is constrained to the authored graph.`);
+          if (opts.trust && typeof opts.trust.nodeFailed === 'function') {
+            await opts.trust.nodeFailed(effectiveNode, err, ctx);
+          }
+          throw err;
+        }
+        // This workflow explicitly authorizes open-ended agentic recovery.
+        onLog(`${label} failed: "${err.message}". Initiating Agentic Recovery...`);
+        
+        // Connector generation is deliberate and lifecycle-gated. Failed execution
+        // is recorded for grouped repair; browser fallback remains available here.
+
+        // 3. Visual RPA Fallback (if Python API failed or wasn't applicable)
         if (!usedCachedApi) {
           try {
-            const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent'];
-            if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type)) {
-              await opts.ensureBrowser();
-            }
-
-            const retryableNodes = ['click', 'type', 'navigate', 'scrape', 'extract', 'extract_list'];
-            const maxRetries = retryableNodes.includes(effectiveNode.type) ? 3 : 1;
-            let lastErr;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-              try {
-                await runGraphNode(agent, effectiveNode, { onLog, secrets, scraped, ctx, label, visionResolver });
-                lastErr = null;
-                break;
-              } catch (attemptErr) {
-                lastErr = attemptErr;
-                if (attempt < maxRetries) {
-                  const delayMs = 1000 * Math.pow(2, attempt - 1);
-                  onLog(`${label} [Retry ${attempt}/${maxRetries}] Failed: "${attemptErr.message}". Retrying after ${delayMs}ms…`);
-                  await new Promise(r => setTimeout(r, delayMs));
-                }
-              }
-            }
-            if (lastErr) throw lastErr;
-          } catch (err) {
-            // Step failed after all retries! Let's become agentic upon failure!
-            onLog(`${label} failed: "${err.message}". Initiating Agentic Recovery...`);
+            onLog(`[Recovery] Analyzing page visually to resolve goal: "${goal}"…`);
             
-            // 2. Python API Generation Fallback
-            if (opts.db && url && url !== 'about:blank') {
-              onLog(`[Recovery] Attempting to generate Python API script for goal: "${goal}"…`);
-              try {
-                const htmlContext = agent.page ? await agent.page.content().catch(()=>'') : '';
-                const scriptCode = await generatePythonApi(goal, url, htmlContext, secrets);
-                if (scriptCode) {
-                  onLog(`[Recovery] Executing generated Python script...`);
-                  const apiResult = await executePythonScript(scriptCode, onLog);
-                  scraped[effectiveNode.id] = apiResult;
-                  ctx.lastScrape = typeof apiResult === 'string' ? apiResult : JSON.stringify(apiResult);
-                  
-                  // Cache it globally!
-                  await opts.db.collection('global_api_scripts').doc(scriptHash).set({
-                    goal, url: normalizedUrl, code: scriptCode, createdAt: new Date()
-                  });
-                  onLog(`[Recovery] Python API script succeeded and cached globally!`);
-                  ctx.lastError = null;
-                  usedCachedApi = true;
-                }
-              } catch (apiErr) {
-                onLog(`[Recovery] Python API fallback failed: ${apiErr.message}. Falling back to visual RPA...`);
-              }
+            let stepDecision;
+            if (typeof agent.runAgentStep === 'function') {
+              stepDecision = await agent.runAgentStep(goal, []);
+            } else if (visionResolver && typeof visionResolver.agentStep === 'function') {
+              const screenshot = await agent.captureScreenshotBase64();
+              stepDecision = await visionResolver.agentStep(goal, [], screenshot);
             }
-
-            // 3. Visual RPA Fallback (if Python API failed or wasn't applicable)
-            if (!usedCachedApi) {
-              try {
-                onLog(`[Recovery] Analyzing page visually to resolve goal: "${goal}"…`);
-                
-                let stepDecision;
-                if (typeof agent.runAgentStep === 'function') {
-                  stepDecision = await agent.runAgentStep(goal, []);
-                } else if (visionResolver && typeof visionResolver.agentStep === 'function') {
-                  const screenshot = await agent.captureScreenshotBase64();
-                  stepDecision = await visionResolver.agentStep(goal, [], screenshot);
-                }
-                
-                if (stepDecision && stepDecision.action && stepDecision.action !== 'finish') {
-                  onLog(`[Recovery] Agent decided: ${stepDecision.action} -> ${stepDecision.description || stepDecision.url || stepDecision.value || ''}`);
-                  
-                  let healedSelector = null;
-                  if (stepDecision.action === 'click') {
-                    healedSelector = await smartClick(agent, { description: stepDecision.description }, onLog, visionResolver);
-                  } else if (stepDecision.action === 'type') {
-                    healedSelector = await smartType(agent, { description: stepDecision.description }, stepDecision.value || effectiveNode.data?.value || '', onLog, visionResolver);
-                  } else if (stepDecision.action === 'navigate' && stepDecision.url) {
-                    await agent.navigate(stepDecision.url);
-                  } else if (stepDecision.action === 'wait') {
-                    await agent.wait(parseInt(stepDecision.ms || '2000', 10));
-                  }
-                  
-                  if (healedSelector && opts.onSelfHealed) {
-                    onLog(`[Recovery] Healing successful! Auto-crystallizing selector: "${healedSelector}"`);
-                    opts.onSelfHealed(effectiveNode.id, healedSelector);
-                  }
-                  // Recovery succeeded! Clear the error.
-                  ctx.lastError = null;
-                } else {
-                  throw err; // throw original error if agent couldn't make a decision
-                }
-              } catch (recoveryErr) {
-                ctx.lastError = err; // Keep original error
-                onLog(`${label} Agentic Recovery failed: ${recoveryErr.message}`);
+            
+            if (stepDecision && stepDecision.action && stepDecision.action !== 'finish') {
+              onLog(`[Recovery] Agent decided: ${stepDecision.action} -> ${stepDecision.description || stepDecision.url || stepDecision.value || ''}`);
+              
+              let healedSelector = null;
+              if (stepDecision.action === 'click') {
+                healedSelector = await smartClick(agent, { description: stepDecision.description }, onLog, visionResolver);
+              } else if (stepDecision.action === 'type') {
+                healedSelector = await smartType(agent, { description: stepDecision.description }, stepDecision.value || effectiveNode.data?.value || '', onLog, visionResolver);
+              } else if (stepDecision.action === 'navigate' && stepDecision.url) {
+                await agent.navigate(stepDecision.url);
+              } else if (stepDecision.action === 'wait') {
+                await agent.wait(parseInt(stepDecision.ms || '2000', 10));
               }
+              
+              if (healedSelector && opts.onSelfHealed) {
+                onLog(`[Recovery] Healing successful! Auto-crystallizing selector: "${healedSelector}"`);
+                opts.onSelfHealed(effectiveNode.id, healedSelector);
+              }
+              // Recovery succeeded! Clear the error.
+              ctx.lastError = null;
+            } else {
+              throw err; // throw original error if agent couldn't make a decision
             }
+          } catch (recoveryErr) {
+            ctx.lastError = err; // Keep original error
+            onLog(`${label} Agentic Recovery failed: ${recoveryErr.message}`);
           }
         }
+      }
+    }
 
-        if (opts.trust) {
-          await opts.trust.afterNode(effectiveNode, scraped[effectiveNode.id], ctx);
-        }
-      } catch (executionErr) {
-        if (opts.trust) {
-          await opts.trust.nodeFailed(effectiveNode, executionErr, ctx);
-        }
-        throw executionErr;
+    if (opts.orchestration && typeof opts.orchestration.afterNode === 'function') {
+      await opts.orchestration.afterNode(effectiveNode, scraped[effectiveNode.id], ctx);
+    }
+
+    if (opts.trust) {
+      if (ctx.lastError && typeof opts.trust.nodeFailed === 'function') {
+        await opts.trust.nodeFailed(effectiveNode, ctx.lastError, ctx);
+      } else if (typeof opts.trust.afterNode === 'function') {
+        await opts.trust.afterNode(effectiveNode, scraped[effectiveNode.id], ctx);
       }
     }
 
@@ -954,7 +939,7 @@ async function smartClick(agent, data, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.clickByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await retryWithBackoff(async () => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
+      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.clickByStrategy(loc.strategy, loc.value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;
@@ -995,7 +980,7 @@ async function smartType(agent, data, value, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.typeByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await retryWithBackoff(async () => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
+      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.typeByStrategy(loc.strategy, loc.value, value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;

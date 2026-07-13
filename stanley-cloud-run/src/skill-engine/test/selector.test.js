@@ -1,0 +1,5 @@
+const test = require('node:test'); const assert = require('node:assert/strict');
+const { selectSkill } = require('../src');
+const skill = { skillId: 's1', tenantId: 'tenant-1', version: 'v1', state: 'active', workflowId: 'wf-1', operationName: 'sync', inputSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } }, match: { tags: ['crm'] }, preconditions: [], targetDomains: ['api.example.com'], confidence: 0.9, successCount: 10, failureCount: 0, driftCount: 0 };
+test('selects and explains the highest compatible skill without embeddings', () => { const result = selectSkill([skill], { tenantId: 'tenant-1', workflowId: 'wf-1', operationName: 'sync', input: { id: '1' }, tags: ['crm'], targetDomain: 'api.example.com' }); assert.equal(result.selected.skillId, 's1'); assert.match(result.explanation.reasons.join(' '), /workflow match/); });
+test('fails closed on tenant and schema mismatches', () => { assert.equal(selectSkill([skill], { tenantId: 'tenant-2', workflowId: 'wf-1', input: { id: '1' } }).selected, null); assert.equal(selectSkill([skill], { tenantId: 'tenant-1', workflowId: 'wf-1', input: {} }).selected, null); });

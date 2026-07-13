@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles } from 'lucide-react';
+import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles, Plug, ShieldAlert, BrainCircuit } from 'lucide-react';
+import { ExceptionNavBadge } from '../../GPT-Additions/website-overlay/ExceptionNavBadge';
 import { toast } from 'sonner';
 import { listDocs } from '../lib/firestore';
 import { CommandPalette } from './CommandPalette';
@@ -78,6 +79,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { name: 'Visual Flow', path: '/dashboard/canvas', icon: Activity },
     { name: 'Results', path: '/dashboard/results', icon: Database },
     { name: 'Credential Vault', path: '/dashboard/vault', icon: KeyRound },
+    { name: 'Operations', path: '/dashboard/operations', icon: BrainCircuit },
+    { name: 'Connectors', path: '/dashboard/connectors', icon: Plug },
+    { name: 'Exceptions', path: '/dashboard/exceptions', icon: ShieldAlert },
     { name: 'Guide', path: '/dashboard/guide', icon: BookOpen },
     { name: 'Templates', path: '/dashboard/templates', icon: LayoutTemplate },
     { name: 'Settings', path: '/dashboard/settings', icon: Settings },
@@ -113,6 +117,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 >
                   <Icon size={16} />
                   <span>{item.name}</span>
+                  {item.name === 'Exceptions' && <ExceptionNavBadge />}
                 </Link>
               );
             })}
