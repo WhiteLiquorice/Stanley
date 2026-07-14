@@ -939,7 +939,7 @@ async function smartClick(agent, data, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.clickByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
+      const loc = await retryWithBackoff(async () => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.clickByStrategy(loc.strategy, loc.value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;
@@ -980,7 +980,7 @@ async function smartType(agent, data, value, onLog, visionResolver) {
         typeof agent.captureScreenshotBase64 === 'function' &&
         typeof agent.typeByStrategy === 'function') {
       onLog(`   ↳ Semantic match missed; asking Gemini vision…`);
-      const loc = await retryWithBackoff(() => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
+      const loc = await retryWithBackoff(async () => visionResolver.resolveElement(await agent.captureScreenshotBase64(), cleanDesc, agent._aiContext), onLog);
       onLog(`   ↳ [Vision] "${cleanDesc}" → ${loc.strategy}${loc.roleType ? '/' + loc.roleType : ''}:"${loc.value}"`);
       await agent.typeByStrategy(loc.strategy, loc.value, value, loc.roleType);
       return loc.strategy === 'css' ? loc.value : null;
