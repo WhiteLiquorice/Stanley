@@ -250,6 +250,7 @@ async function submitRun(uid, workflowId, options) {
 }
 
 app.get('/', (_req, res) => res.status(200).send('Stanley cloud runner OK'));
+app.get('/health', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
 app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
 
 app.post('/v1/workflows/:workflowId/runs', async (req, res) => {
