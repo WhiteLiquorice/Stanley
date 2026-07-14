@@ -16,9 +16,6 @@ RUN apt-get update && apt-get install -y python3 python3-pip && pip3 install req
 # App source (engine files are flat copies of the desktop daemon — see README).
 COPY . .
 
-# Run the patch engine script to apply constrained-recovery patch to branchingEngine.js
-RUN node scripts/patchEngine.js
-
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
