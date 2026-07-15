@@ -40,6 +40,23 @@ export interface RunCheckpoint {
   createdAt: string;
 }
 
+export interface BrowserTakeoverElement {
+  ref: string;
+  role: string;
+  name: string;
+  disabled: boolean;
+  editable: boolean;
+}
+
+export interface BrowserTakeover {
+  runId: string;
+  state: 'awaiting_operator' | 'claimed' | 'resumed' | 'aborted' | 'expired';
+  reason: string;
+  expiresAt: string;
+  leaseExpiresAt?: string | null;
+  snapshot?: { url: string; title: string; elements: BrowserTakeoverElement[] } | null;
+}
+
 const runnerUrl = (import.meta.env.VITE_RUNNER_URL as string | undefined)?.replace(/\/$/, '');
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -90,4 +107,23 @@ export async function getRunReceipts(runId: string): Promise<ProofReceipt[]> {
 export async function getLatestCheckpoint(runId: string): Promise<RunCheckpoint> {
   const payload = await request<{ checkpoint: RunCheckpoint }>(`/v1/runs/${encodeURIComponent(runId)}/checkpoint`);
   return payload.checkpoint;
+}
+
+export async function getBrowserTakeover(runId: string): Promise<BrowserTakeover> {
+  const payload = await request<{ takeover: BrowserTakeover }>(`/v1/runs/${encodeURIComponent(runId)}/takeover`);
+  return payload.takeover;
+}
+
+export async function claimBrowserTakeover(runId: string): Promise<{ token: string; leaseExpiresAt: string }> {
+  return request(`/v1/runs/${encodeURIComponent(runId)}/takeover/claim`, { method: 'POST', body: '{}' });
+}
+
+export async function sendBrowserTakeoverCommand(runId: string, token: string, command: { type: 'click_ref' | 'type_ref' | 'resume' | 'abort'; ref?: string; value?: string }): Promise<void> {
+  await request(`/v1/runs/${encodeURIComponent(runId)}/takeover/commands`, {
+    method: 'POST', headers: { 'X-Stanley-Takeover-Token': token }, body: JSON.stringify(command),
+  });
+}
+
+export async function heartbeatBrowserTakeover(runId: string, token: string): Promise<void> {
+  await request(`/v1/runs/${encodeURIComponent(runId)}/takeover/heartbeat`, { method: 'POST', headers: { 'X-Stanley-Takeover-Token': token }, body: '{}' });
 }

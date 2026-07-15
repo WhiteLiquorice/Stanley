@@ -88,6 +88,9 @@ class StanleyFoundation {
             userAgent: this.config.userAgent,
             viewport: this.config.viewport,
         };
+        if (this.config.storageState) {
+            contextOptions.storageState = this.config.storageState;
+        }
         if (this.config.statePath && fs.existsSync(this.config.statePath)) {
             console.log(`[StanleyFoundation] Restoring state session from: ${this.config.statePath}`);
             try {

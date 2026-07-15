@@ -22,6 +22,7 @@ export async function signIn(email: string, password: string): Promise<SignInRes
   try {
     let uid = 'mock-uid-' + Math.random().toString(36).substring(2, 9);
     let idToken = 'mock-id-token-' + Math.random().toString(36).substring(2, 9);
+    let refreshToken = 'mock-refresh-token';
     let expiresInSec = 3600;
     let status = 'active';
 
@@ -56,12 +57,23 @@ export async function signIn(email: string, password: string): Promise<SignInRes
             console.warn('Firebase signup also failed, falling back to mock login');
           }
         }
+
+        if (!authRes.ok) {
+          if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            let errorMsg = 'Incorrect email or password.';
+            if (code === 'INVALID_EMAIL') {
+              errorMsg = 'Invalid email address format.';
+            }
+            return { ok: false, error: errorMsg };
+          }
+        }
       }
 
       if (authRes.ok) {
         const authData = await authRes.json();
         uid = authData.localId as string;
         idToken = authData.idToken as string;
+        refreshToken = authData.refreshToken as string;
         expiresInSec = parseInt(authData.expiresIn || '3600', 10);
         
         // Try checking license, but do not block if it's inactive or missing in firestore
@@ -92,7 +104,7 @@ export async function signIn(email: string, password: string): Promise<SignInRes
     localStorage.setItem('stanley_uid', uid);
     localStorage.setItem('stanley_email', email);
     localStorage.setItem('stanley_id_token', idToken);
-    localStorage.setItem('stanley_refresh_token', 'mock-refresh-token');
+    localStorage.setItem('stanley_refresh_token', refreshToken);
     localStorage.setItem('stanley_token_expires_at', String(Date.now() + expiresInSec * 1000));
     localStorage.setItem('stanley_status', status); // Use variable status to bypass warning
 

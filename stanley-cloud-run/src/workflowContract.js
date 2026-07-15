@@ -4,10 +4,12 @@ const FLOW_ONLY_TYPES = new Set([
   'label', 'ai_prompt', 'js_code', 'integration', 'ai_agent', 'agent',
   'vision', 'approval', 'http_request', 'loop', 'transform', 'send_slack',
   'send_email', 'monitor', 'router', 'extract', 'extract_list', 'paginate',
-  'webhook_trigger', 'schedule_trigger'
+  'webhook_trigger', 'schedule_trigger', 'connector', 'native_integration', 'assertion',
+  'scroll', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown',
+  'hover', 'drag_drop', 'upload_file', 'download_file', 'mcp_tool'
 ]);
 
-const DANGEROUS_TYPES = new Set(['js_code', 'send_email', 'send_slack', 'http_request', 'integration']);
+const DANGEROUS_TYPES = new Set(['js_code', 'send_email', 'send_slack', 'http_request', 'integration', 'connector', 'native_integration', 'mcp_tool', 'upload_file', 'download_file']);
 
 class WorkflowContractError extends Error {
   constructor(issues) {

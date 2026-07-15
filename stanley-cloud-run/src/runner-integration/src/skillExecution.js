@@ -1,10 +1,10 @@
 const { FirestoreSkillStore, SkillService, createSkillRouter } = require('../../skill-engine');
 const { LearningStore } = require('../../learning-engine');
 
-function installSkillOverlay({ app, db, authenticateUser, runWorkflow, trustStore, resolveAllSecrets }) {
+function installSkillOverlay({ app, db, authenticateUser, runWorkflow, trustStore, resolveAllSecrets, onActivated, artifactService = null }) {
   if (!app || !db || !authenticateUser || !runWorkflow || !trustStore || !resolveAllSecrets) throw new Error('Skill overlay requires app, db, auth, runner, Trust, and vault resolution.');
   const store = new FirestoreSkillStore(db);
-  const runner = (workflow, secrets, input, options) => runWorkflow(workflow, secrets, input, { db, uid: options.tenantId, runId: options.runId, policy: { allowAgenticRecovery: false }, ...options });
+  const runner = (workflow, secrets, input, options) => runWorkflow(workflow, secrets, input, { db, uid: options.tenantId, runId: options.runId, policy: { allowAgenticRecovery: false }, artifactService, ...options });
   const service = new SkillService({ store, runner, trustStore, learningStore: new LearningStore(db) });
   const resolveDeclared = async (uid, refs = []) => { const all = await resolveAllSecrets(db, uid); return Object.fromEntries(refs.filter((ref) => Object.prototype.hasOwnProperty.call(all, ref)).map((ref) => [ref, all[ref]])); };
   const loadCompilationSource = async (uid, runId) => {
@@ -14,7 +14,7 @@ function installSkillOverlay({ app, db, authenticateUser, runWorkflow, trustStor
     const workflowSnap = await db.collection('stanley_users').doc(uid).collection('workflows').doc(run.workflowId).get(); if (!workflowSnap.exists) throw new Error('Source workflow not found.');
     return { workflow: { id: workflowSnap.id, ...workflowSnap.data() }, run, trustReport: run.trustReport, regressionCases: run.regressionCases || [] };
   };
-  app.use('/v1/skills', async (req, res, next) => { try { req.uid = await authenticateUser(req); next(); } catch (error) { res.status(error.status || 401).json({ success: false, error: error.message }); } }, createSkillRouter({ service, loadCompilationSource, resolveSecrets: resolveDeclared, requireUser: (req) => req.uid }));
+  app.use('/v1/skills', async (req, res, next) => { try { req.uid = await authenticateUser(req); next(); } catch (error) { res.status(error.status || 401).json({ success: false, error: error.message }); } }, createSkillRouter({ service, loadCompilationSource, resolveSecrets: resolveDeclared, requireUser: (req) => req.uid, onActivated }));
   return {
     service,
     async executeBeforeWorkflow({ uid, runId, workflow, input, secrets, mode = 'live', orchestration = null }) {

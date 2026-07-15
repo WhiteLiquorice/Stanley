@@ -24,10 +24,41 @@ authorize the broader recovery path.
 - Persists the completed run in `stanley_users/{uid}/runs/{runId}`.
 - Body is optional: `{ "input": { ... } }` for workflow interpolation.
 
+This endpoint is the draft/manual test surface. Public generated clients use
+`POST /v1/workflows/:workflowId/invoke`, which fails closed until a tested
+release has been promoted through test and staging to production, then always
+executes that immutable production snapshot.
+
 `POST /v1/internal/workflows/:workflowId/runs`
 
 - For trusted schedulers and webhooks only.
 - Requires `X-Stanley-Internal-Key` and `{ "uid": "...", "input": { ... } }`.
+
+## Workflow platform
+
+- `GET|PUT /v1/workflows/:workflowId/platform` manages typed input/output
+  contracts, model budgets, context budgets, and regression fixtures.
+- `/v1/workflows/:workflowId/releases` creates immutable snapshots. A release
+  must pass shadow-safe regressions before sequential test, staging, and
+  production promotion; tested snapshots may be used as rollback targets.
+- `POST /v1/workflows/:workflowId/debug` runs through a selected node while
+  replacing side-effecting nodes with deterministic waits.
+- `GET /v1/workflows/:workflowId/clients` emits curl, JavaScript, Python, and
+  OpenAPI clients for the production invocation endpoint.
+- `POST /v1/runs/:runId/replay` replays the original private input and release.
+
+## MCP and artifacts
+
+`POST /v1/mcp/key` rotates the tenant MCP key. The JSON-RPC endpoint is
+`POST /mcp`; only workflows with a promoted production release appear in
+`tools/list`. Workflow `mcp_tool` nodes negotiate Streamable HTTP
+initialization/session state before invoking remote tools.
+
+Tenant artifacts are available at `/v1/artifacts`. Uploads and browser
+downloads are capped at 10 MiB, stored under tenant-scoped Storage paths, and
+may be listed, downloaded by short-lived signed URL, or deleted. Browser
+`upload_file` and `download_file` nodes use these records rather than arbitrary
+container paths.
 
 ## Deployment checklist
 
@@ -44,6 +75,14 @@ The promoted revision needs `STANLEY_PROJECT_ID`, the existing
 `ALLOWED_ORIGINS`, and the same Firestore and Vertex AI permissions as the
 current runner. Set the resulting service URL as `VITE_RUNNER_URL` during the
 frontend build.
+
+Also configure `ARTIFACT_BUCKET`. Store `BROWSER_SESSION_ENCRYPTION_KEY` as a
+32-byte Secret Manager value rather than in `env.yaml`; encrypted browser
+session persistence and takeover snapshots fail closed without it. Model
+routing recognizes `VISION_MODEL`, `EXTRACTION_MODEL`, `QUALITY_MODEL`, and an
+optional `FALLBACK_MODEL`. Storage artifact records include `expiresAt`; enable
+Firestore TTL for that field and a matching Cloud Storage lifecycle policy for
+automatic retention cleanup.
 
 This can remain scale-to-zero before customers. The service URL stays available;
 Cloud Run may cold-start the first request, but no always-on instance is required.

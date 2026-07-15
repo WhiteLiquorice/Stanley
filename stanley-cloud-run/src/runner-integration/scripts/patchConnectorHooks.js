@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const targetArg = process.argv.slice(2).find((arg) => !arg.startsWith('--'));
-const target = targetArg || path.resolve(__dirname, '../../../stanley-cloud-run/branchingEngine.js');
+const target = targetArg || path.resolve(__dirname, '../../../branchingEngine.js');
 const checkOnly = process.argv.includes('--check');
 const raw = fs.readFileSync(target, 'utf8'); const crlf = raw.includes('\r\n'); let source = raw.replace(/\r\n/g, '\n');
 

@@ -1,6 +1,8 @@
 const { StanleyFoundationEnhanced } = require('../foundationAgent.enhanced.js');
 const { executeGraph } = require('../branchingEngine.js');
 const visionResolver = require('../visionResolver.js');
+const { BrowserRunRuntime, getBrowserRuntimeServices } = require('./browser-runtime');
+const { normalizeModelPolicy } = require('./workflow-platform');
 
 class WorkflowPausedForApproval extends Error {
   constructor(message, logs) {
@@ -20,13 +22,14 @@ function createEngineDb(db, uid) {
   };
 }
 
-async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog, connectorRuntime = null, connectorApproval = null, trust = null, orchestration = null } = {}) {
+async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog, connectorRuntime = null, connectorApproval = null, trust = null, orchestration = null, artifactService = null } = {}) {
   const logs = [];
   const onLog = (line) => {
     logs.push(line);
     console.log(line);
     reportLog?.(line);
   };
+  const routedVision = visionResolver.createRoutedResolver(normalizeModelPolicy(workflow), (usage) => onLog(`[Model] ${usage.purpose} via ${usage.model}${usage.fallback ? ' (fallback)' : ''} in ${usage.durationMs}ms.`));
 
   const hasStartUrl = (workflow.nodes || []).some((node) =>
     ['trigger', 'navigate', 'open_tab'].includes(node.type) &&
@@ -34,6 +37,11 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
   );
   if (!hasStartUrl) throw new Error('Workflow has no valid starting URL.');
 
+  const browserRuntime = db && uid && runId ? new BrowserRunRuntime({
+    services: getBrowserRuntimeServices(db), uid, runId, workflowId: workflow.id,
+    sessionId: workflow.browserSessionId || workflow.id,
+    sessionRetentionDays: workflow.browserPolicy?.sessionRetentionDays || 30,
+  }) : null;
   const agent = new StanleyFoundationEnhanced({
     headless: true,
     channel: '',
@@ -47,11 +55,14 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
     ],
   });
 
+  let runtimeOutcome = 'failed';
   try {
     const ensureBrowser = async () => {
       if (agent.page) return;
+      if (browserRuntime) agent.config.storageState = await browserRuntime.prepare();
       onLog('[Runner] Initializing cloud browser…');
       await agent.initialize();
+      if (browserRuntime) await browserRuntime.attach(agent);
     };
 
     const engineDb = db && uid ? createEngineDb(db, uid) : null;
@@ -59,7 +70,7 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
       onLog,
       secrets,
       input,
-      visionResolver,
+      visionResolver: routedVision,
       ensureBrowser,
       db: engineDb,
       uid,
@@ -68,6 +79,8 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
       connectorApproval,
       trust,
       orchestration,
+      browserRuntime,
+      artifactService,
       allowAgenticRecovery: policy.allowAgenticRecovery === true,
       maxSteps: 1000,
       onSelfHealed: async (nodeId, healedSelector) => {
@@ -83,11 +96,26 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
         onLog(`[Memory] Persisted healed selector for node "${nodeId}".`);
       },
       onBlocked: async (block, label) => {
+        if (browserRuntime) {
+          let takeoverException = null;
+          if (trust?.store) {
+            takeoverException = await trust.store.openException(uid, {
+              runId, workflowId: workflow.id, kind: 'browser_takeover', severity: 'warning',
+              title: 'Browser needs your help', summary: `${label}: ${block.hint}`,
+              evidence: { takeoverAvailable: true, reason: block.hint },
+            });
+            trust.failureRecorded = true;
+          }
+          await browserRuntime.handleBlocked(agent, block, label);
+          if (takeoverException) await trust.store.resolveException(uid, takeoverException.id, { action: 'interactive_takeover_resumed', note: 'The operator safely resumed the browser run.' });
+          return;
+        }
         throw new Error(`${label} Blocked by ${block.hint}.`);
       },
     });
     onLog('[Runner] Workflow completed successfully.');
-    return { logs, scraped };
+    runtimeOutcome = 'completed';
+    return { logs, scraped, modelUsage: routedVision.usage, modelCalls: routedVision.usage.calls };
   } catch (error) {
     if (error.message === 'WORKFLOW_PAUSED_FOR_APPROVAL') {
       throw new WorkflowPausedForApproval(error.message, logs);
@@ -97,6 +125,7 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
     throw error;
   } finally {
     onLog('[Runner] Cleaning up browser…');
+    if (browserRuntime) await browserRuntime.close(agent, runtimeOutcome).catch((error) => onLog(`[Runner] Browser runtime finalization warning: ${error.message}`));
     await agent.cleanup().catch(() => {});
   }
 }

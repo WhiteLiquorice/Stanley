@@ -15,6 +15,10 @@ import {
 import { toast } from 'sonner';
 import {
   getLatestCheckpoint,
+  getBrowserTakeover,
+  claimBrowserTakeover,
+  heartbeatBrowserTakeover,
+  sendBrowserTakeoverCommand,
   getRunReceipts,
   listTrustExceptions,
   resolveTrustException,
@@ -22,6 +26,7 @@ import {
   type ProofReceipt,
   type RunCheckpoint,
   type TrustException,
+  type BrowserTakeover,
 } from '../trust-engine/web-client/trustClient';
 
 type Filter = 'open' | 'all';
@@ -95,6 +100,9 @@ export function ExceptionWorkbench() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [receipts, setReceipts] = useState<ProofReceipt[]>([]);
   const [checkpoint, setCheckpoint] = useState<RunCheckpoint | null>(null);
+  const [takeover, setTakeover] = useState<BrowserTakeover | null>(null);
+  const [takeoverToken, setTakeoverToken] = useState('');
+  const [takeoverValues, setTakeoverValues] = useState<Record<string, string>>({});
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -126,19 +134,51 @@ export function ExceptionWorkbench() {
     if (!selected) {
       setReceipts([]);
       setCheckpoint(null);
+      setTakeover(null);
+      setTakeoverToken('');
       return;
     }
     let active = true;
     setDetailLoading(true);
-    Promise.allSettled([getRunReceipts(selected.runId), getLatestCheckpoint(selected.runId)])
-      .then(([receiptResult, checkpointResult]) => {
+    Promise.allSettled([getRunReceipts(selected.runId), getLatestCheckpoint(selected.runId), getBrowserTakeover(selected.runId)])
+      .then(([receiptResult, checkpointResult, takeoverResult]) => {
         if (!active) return;
         setReceipts(receiptResult.status === 'fulfilled' ? receiptResult.value : []);
         setCheckpoint(checkpointResult.status === 'fulfilled' ? checkpointResult.value : null);
+        setTakeover(takeoverResult.status === 'fulfilled' ? takeoverResult.value : null);
+        setTakeoverToken('');
       })
       .finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
   }, [selected]);
+
+  useEffect(() => {
+    if (!selected || !takeoverToken) return;
+    const timer = window.setInterval(() => { void heartbeatBrowserTakeover(selected.runId, takeoverToken).catch(() => setTakeoverToken('')); }, 45_000);
+    return () => window.clearInterval(timer);
+  }, [selected, takeoverToken]);
+
+  const claimTakeover = async () => {
+    if (!selected) return;
+    setAction('takeover');
+    try {
+      const claim = await claimBrowserTakeover(selected.runId); setTakeoverToken(claim.token);
+      setTakeover((current) => current ? { ...current, state: 'claimed', leaseExpiresAt: claim.leaseExpiresAt } : current);
+      toast.success('Secure browser control claimed');
+    } catch (requestError) { toast.error(requestError instanceof Error ? requestError.message : 'Takeover could not be claimed.'); }
+    finally { setAction(null); }
+  };
+
+  const takeoverCommand = async (type: 'click_ref' | 'type_ref' | 'resume' | 'abort', ref?: string) => {
+    if (!selected || !takeoverToken) return;
+    setAction(`takeover:${type}:${ref || ''}`);
+    try {
+      await sendBrowserTakeoverCommand(selected.runId, takeoverToken, { type, ref, value: ref ? takeoverValues[ref] || '' : undefined });
+      if (type === 'resume' || type === 'abort') { setTakeover((current) => current ? { ...current, state: type === 'resume' ? 'resumed' : 'aborted' } : current); setTakeoverToken(''); }
+      toast.success(type === 'resume' ? 'Run resumed' : type === 'abort' ? 'Run aborted' : 'Browser command queued');
+    } catch (requestError) { toast.error(requestError instanceof Error ? requestError.message : 'Browser command failed.'); }
+    finally { setAction(null); }
+  };
 
   const resolveSelected = async (state: 'resolved' | 'dismissed') => {
     if (!selected) return;
@@ -283,6 +323,33 @@ export function ExceptionWorkbench() {
                     <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-500">What Stanley observed</h3>
                     <div className="rounded-xl border border-[#EAE6DF] bg-[#FDFBF7] p-4"><EvidenceSummary value={selected.evidence} /></div>
                   </section>
+
+                  {takeover && ['awaiting_operator', 'claimed'].includes(takeover.state) && (
+                    <section className="rounded-xl border border-violet-200 bg-violet-50/60 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div><h3 className="text-xs font-bold uppercase tracking-wider text-violet-700">Interactive browser takeover</h3><p className="mt-1 text-xs text-slate-600">{takeover.reason}</p></div>
+                        {!takeoverToken && <button type="button" onClick={() => void claimTakeover()} disabled={Boolean(action)} className="rounded-lg bg-[#6C47FF] px-3 py-2 text-xs font-bold text-white disabled:opacity-40">Claim control</button>}
+                      </div>
+                      {takeoverToken && (
+                        <div className="mt-4 space-y-3">
+                          <p className="text-[11px] text-slate-500">Only the semantic controls below are available; Stanley never exposes arbitrary scripts or selectors.</p>
+                          <div className="max-h-56 space-y-2 overflow-y-auto">
+                            {(takeover.snapshot?.elements || []).filter((element) => !element.disabled).map((element) => (
+                              <div key={element.ref} className="flex items-center gap-2 rounded-lg border border-violet-100 bg-white p-2">
+                                <span className="min-w-0 flex-1 truncate text-xs text-slate-700"><b className="text-slate-500">{element.role}</b> {element.name || 'Unnamed control'}</span>
+                                {element.editable && <input value={takeoverValues[element.ref] || ''} onChange={(event) => setTakeoverValues((current) => ({ ...current, [element.ref]: event.target.value }))} placeholder="Value" className="w-32 rounded-md border border-slate-200 px-2 py-1 text-xs" />}
+                                <button type="button" onClick={() => void takeoverCommand(element.editable ? 'type_ref' : 'click_ref', element.ref)} disabled={Boolean(action)} className="rounded-md border border-violet-200 px-2.5 py-1 text-[11px] font-bold text-violet-700 disabled:opacity-40">{element.editable ? 'Type' : 'Click'}</button>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex gap-2 border-t border-violet-100 pt-3">
+                            <button type="button" onClick={() => void takeoverCommand('resume')} disabled={Boolean(action)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">Resume run</button>
+                            <button type="button" onClick={() => void takeoverCommand('abort')} disabled={Boolean(action)} className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 disabled:opacity-40">Abort safely</button>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  )}
 
                   <section>
                     <div className="mb-3 flex items-center justify-between">

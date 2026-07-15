@@ -7,6 +7,7 @@
 const crypto = require('crypto');
 const { executePythonScript } = require('./pythonExecutor.js');
 const { generatePythonApi } = require('./apiResolver.js');
+const { callMcpTool } = require('./src/mcp-engine/client.js');
 
 const MAX_STEPS_DEFAULT = 500;
 
@@ -133,6 +134,9 @@ async function executeGraph(agent, workflow, opts = {}) {
     if (opts.trust && typeof opts.trust.beforeNode === 'function') {
       await opts.trust.beforeNode(effectiveNode, ctx);
     }
+    if (opts.browserRuntime && typeof opts.browserRuntime.beforeNode === 'function') {
+      await opts.browserRuntime.beforeNode(effectiveNode, ctx);
+    }
 
     const goal = effectiveNode.data?.description || ctx.missionPrompt || `Locate and perform action on the page.`;
     const url = agent.page ? agent.page.url() : '';
@@ -167,7 +171,7 @@ async function executeGraph(agent, workflow, opts = {}) {
 
     if (!usedCachedApi) {
       try {
-        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent'];
+        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent', 'scroll', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown', 'hover', 'drag_drop', 'upload_file', 'download_file'];
         if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type)) {
           await opts.ensureBrowser();
         }
@@ -177,7 +181,17 @@ async function executeGraph(agent, workflow, opts = {}) {
         let lastErr;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            await runGraphNode(agent, effectiveNode, { onLog, secrets, scraped, ctx, label, visionResolver });
+            await runGraphNode(agent, effectiveNode, {
+              onLog, secrets, scraped, ctx, label, visionResolver,
+              artifactService: opts.artifactService, uid: opts.uid, runId: opts.runId,
+              workflow, nodesById, runtimeOptions: opts,
+            });
+            const visibility = effectiveNode.data?.contextVisibility || workflow.contextPolicy?.defaultVisibility || 'ephemeral';
+            if (visibility === 'hidden') ctx.lastScrape = '';
+            else if (typeof ctx.lastScrape === 'string') {
+              const limit = Math.max(500, Number(workflow.contextPolicy?.maxObservationChars || 6000));
+              if (ctx.lastScrape.length > limit) ctx.lastScrape = `${ctx.lastScrape.slice(0, limit)}...[COMPACTED]`;
+            }
             lastErr = null;
             break;
           } catch (attemptErr) {
@@ -191,6 +205,9 @@ async function executeGraph(agent, workflow, opts = {}) {
         }
         if (lastErr) throw lastErr;
       } catch (err) {
+        if (opts.browserRuntime && typeof opts.browserRuntime.nodeFailed === 'function') {
+          await opts.browserRuntime.nodeFailed(effectiveNode, err, ctx).catch(() => {});
+        }
         if (opts.allowAgenticRecovery !== true) {
           onLog(`${label} failed: "${err.message}". Recovery is constrained to the authored graph.`);
           if (opts.trust && typeof opts.trust.nodeFailed === 'function') {
@@ -259,12 +276,14 @@ async function executeGraph(agent, workflow, opts = {}) {
         await opts.trust.afterNode(effectiveNode, scraped[effectiveNode.id], ctx);
       }
     }
+    if (opts.browserRuntime && typeof opts.browserRuntime.afterNode === 'function' && !ctx.lastError) {
+      await opts.browserRuntime.afterNode(effectiveNode, scraped[effectiveNode.id], ctx);
+    }
 
     if (onBlocked && typeof agent.isPageBlocked === 'function') {
-      try {
-        const block = await agent.isPageBlocked();
-        if (block && block.blocked) await onBlocked(block, label);
-      } catch (_) { /* non-fatal */ }
+      let block = null;
+      try { block = await agent.isPageBlocked(); } catch (_) { /* detection is non-fatal */ }
+      if (block && block.blocked) await onBlocked(block, label);
     }
 
     // Context edges attach parameters; they are not part of execution flow.
@@ -285,7 +304,7 @@ async function executeGraph(agent, workflow, opts = {}) {
   return scraped;
 }
 
-async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, visionResolver }) {
+async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, visionResolver, artifactService, uid, runId, workflow, nodesById, runtimeOptions }) {
   const data = interpolateFields(node.data || {}, ctx, scraped);
 
   switch (node.type) {
@@ -385,6 +404,56 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       break;
     }
 
+    case 'scroll': {
+      const amount = Math.max(-5000, Math.min(5000, Number(data.amount || 700)));
+      if (data.selector) await agent.page.locator(data.selector).first().scrollIntoViewIfNeeded();
+      else await agent.page.evaluate((pixels) => window.scrollBy({ top: pixels, behavior: 'instant' }), amount);
+      onLog(`${label} Scrolled ${data.selector || `${amount}px`}.`); break;
+    }
+    case 'find_text': {
+      const text = String(data.text || data.description || ''); if (!text) throw new Error('Find text node requires text.');
+      const locator = agent.page.getByText(text, { exact: false }).first(); await locator.scrollIntoViewIfNeeded();
+      scraped[node.id] = { found: true, text }; ctx.lastScrape = text; onLog(`${label} Found text.`); break;
+    }
+    case 'go_back': await agent.page.goBack({ waitUntil: 'domcontentloaded' }); onLog(`${label} Went back.`); break;
+    case 'go_forward': await agent.page.goForward({ waitUntil: 'domcontentloaded' }); onLog(`${label} Went forward.`); break;
+    case 'send_keys': {
+      const keys = String(data.keys || ''); if (!/^[a-zA-Z0-9+_-]{1,40}$/.test(keys)) throw new Error('Keyboard shortcut contains unsupported characters.');
+      await agent.page.keyboard.press(keys); onLog(`${label} Sent keyboard shortcut ${keys}.`); break;
+    }
+    case 'select_dropdown': {
+      const locator = data.selector ? agent.page.locator(data.selector).first() : agent.page.getByLabel(String(data.description || '')).first();
+      const option = data.value !== undefined ? { value: String(data.value) } : data.optionLabel ? { label: String(data.optionLabel) } : { index: Number(data.index || 0) };
+      const selected = await locator.selectOption(option); scraped[node.id] = selected; ctx.lastScrape = JSON.stringify(selected); onLog(`${label} Selected dropdown option.`); break;
+    }
+    case 'hover': {
+      const locator = data.selector ? agent.page.locator(data.selector).first() : agent.page.getByText(String(data.description || ''), { exact: false }).first();
+      await locator.hover(); onLog(`${label} Hovered target.`); break;
+    }
+    case 'drag_drop': {
+      if (!data.sourceSelector || !data.targetSelector) throw new Error('Drag and drop requires sourceSelector and targetSelector.');
+      await agent.page.dragAndDrop(data.sourceSelector, data.targetSelector); onLog(`${label} Dragged item.`); break;
+    }
+    case 'upload_file': {
+      if (!artifactService || !uid || !data.artifactId) throw new Error('Upload file requires a tenant artifact.');
+      const local = await artifactService.localPath(uid, data.artifactId);
+      try { const locator = data.selector ? agent.page.locator(data.selector).first() : agent.page.locator('input[type="file"]').first(); await locator.setInputFiles(local.path); }
+      finally { await local.cleanup(); }
+      onLog(`${label} Uploaded tenant artifact ${data.artifactId}.`); break;
+    }
+    case 'download_file': {
+      if (!artifactService || !uid) throw new Error('Artifact storage is unavailable.');
+      const downloadPromise = agent.page.waitForEvent('download', { timeout: Number(data.timeoutMs || 30000) });
+      await smartClick(agent, data, onLog, visionResolver); const download = await downloadPromise;
+      const artifact = await artifactService.fromDownload(uid, download, runId); scraped[node.id] = artifact; ctx.lastScrape = JSON.stringify(artifact); onLog(`${label} Saved download as artifact ${artifact.id}.`); break;
+    }
+    case 'mcp_tool': {
+      let toolArguments = data.arguments || {}; if (typeof toolArguments === 'string') { try { toolArguments = JSON.parse(toolArguments); } catch { throw new Error('MCP tool arguments must be valid JSON.'); } }
+      const token = data.vaultKey ? secrets[data.vaultKey] : '';
+      const result = await callMcpTool({ serverUrl: String(data.serverUrl || ''), toolName: data.toolName, arguments: toolArguments, token });
+      scraped[node.id] = result; ctx.lastScrape = JSON.stringify(result); onLog(`${label} Called MCP tool ${data.toolName}.`); break;
+    }
+
     case 'mission':
     case 'parameter':
       break;
@@ -429,7 +498,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
         throw new Error(`Unsupported integration type: ${integrationType}`);
       }
       
-      scraped[effectiveNode.id] = res;
+      scraped[node.id] = res;
       ctx.lastScrape = JSON.stringify(res);
       break;
     }
@@ -448,7 +517,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
         agentResult = { status: 'failed', reason: 'No browser context' };
       }
       
-      scraped[effectiveNode.id] = agentResult;
+      scraped[node.id] = agentResult;
       ctx.lastScrape = typeof agentResult === 'string' ? agentResult : JSON.stringify(agentResult);
       break;
     }
@@ -513,7 +582,10 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
         
         if (targetNode) {
           try {
-            await runGraphNode(agent, targetNode, { onLog, secrets, scraped, ctx, label: `${label} [Page ${page} Scrape]`, visionResolver });
+            await runGraphNode(agent, targetNode, {
+              onLog, secrets, scraped, ctx, label: `${label} [Page ${page} Scrape]`, visionResolver,
+              artifactService, uid, runId, workflow, nodesById, runtimeOptions,
+            });
             const result = scraped[actionNodeId];
             if (Array.isArray(result)) {
               accumulated.push(...result);
@@ -630,9 +702,9 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       const emailTarget = interpolate(data.email || '', ctx, scraped);
       onLog(`${label} Human-in-the-Loop Checkpoint reached.`);
       
-      if (opts.db && opts.runId) {
+      if (runtimeOptions?.db && runtimeOptions?.runId) {
         onLog(`${label} Pausing execution and notifying ${emailTarget || 'workspace admins'}...`);
-        await opts.db.collection('runs').doc(opts.runId).update({
+        await runtimeOptions.db.collection('runs').doc(runtimeOptions.runId).update({
           status: 'pending_approval',
           approvalContext: contextStr,
           approvalEmail: emailTarget,
@@ -728,7 +800,10 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
           if (childNode) {
             const childData = interpolateFields(childNode.data || {}, ctx, scraped);
             try {
-              await runGraphNode(agent, { ...childNode, data: childData }, { onLog, secrets, scraped, ctx, label: `${label} [${i+1}]`, visionResolver });
+              await runGraphNode(agent, { ...childNode, data: childData }, {
+                onLog, secrets, scraped, ctx, label: `${label} [${i+1}]`, visionResolver,
+                artifactService, uid, runId, workflow, nodesById, runtimeOptions,
+              });
             } catch (err) { onLog(`${label} Loop item ${i+1} failed: ${err.message}`); }
           }
         }
@@ -866,36 +941,30 @@ async function resolveSelectorFallback(agent, failedSelector, description, onLog
   
   onLog(`   [Self-Healing] Intercepting DOM snapshot for failed selector: "${failedSelector}"`);
   try {
-    const elementsSnapshot = await agent.page.evaluate(() => {
-      const elms = [];
-      const tags = ['button', 'input', 'a', 'textarea', 'select', '[role="button"]'];
-      document.querySelectorAll(tags.join(',')).forEach((el, idx) => {
-        if (elms.length > 80) return;
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          elms.push({
-            index: idx,
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || el.value || '').trim().slice(0, 40),
-            placeholder: el.getAttribute('placeholder') || '',
-            id: el.id || '',
-            class: el.className || '',
-            ariaLabel: el.getAttribute('aria-label') || ''
-          });
-        }
-      });
-      return JSON.stringify(elms);
-    });
+    const semanticSnapshot = agent._browserRuntime ? await agent._browserRuntime.snapshot() : null;
+    const elements = semanticSnapshot
+      ? semanticSnapshot.elements.slice(0, 120).map(({ ref, role, name, editable, disabled }) => ({ ref, role, name, editable, disabled }))
+      : await agent.getPrunedInteractiveElements();
+    const elementsSnapshot = JSON.stringify(elements);
+    const answerKind = semanticSnapshot ? 'accessibility ref (for example ax-0123456789ab)' : 'index as a plain number (for example 5)';
 
     const prompt = `The browser automation failed to interact with selector "${failedSelector}".
 Target Element Description: "${description || 'the interactive element'}"
 Here is a list of interactive elements currently on the page:
 ${elementsSnapshot}
 
-Identify the correct element from the list that matches the user's intent. Return only the index of the element as a plain number (e.g. 5). If no match is found, return -1.`;
+Identify the correct element from the list that matches the user's intent. Return only its ${answerKind}. If no match is found, return -1.`;
 
-    const system = `You are a self-healing browser automation assistant. Return a plain number only.`;
+    const system = `You are a self-healing browser automation assistant. Return only one identifier from the supplied list.`;
     const reply = await retryWithBackoff(() => visionResolver.generateText(prompt, system), onLog);
+    if (semanticSnapshot) {
+      const matchedRef = reply.match(/ax-[a-f0-9]{12}/i)?.[0]?.toLowerCase();
+      if (matchedRef && semanticSnapshot.elements.some((element) => element.ref === matchedRef)) {
+        onLog(`   [Self-Healing] Resolved semantic accessibility reference: ${matchedRef}`);
+        return `ref_${matchedRef}`;
+      }
+      return null;
+    }
     const matchedIndex = parseInt(reply.trim().match(/-?\d+/)?.[0] || '-1', 10);
     
     if (matchedIndex !== -1) {
@@ -909,6 +978,10 @@ Identify the correct element from the list that matches the user's intent. Retur
 }
 
 async function smartClick(agent, data, onLog, visionResolver) {
+  if (data.elementRef && agent._browserRuntime) {
+    await agent._browserRuntime.clickRef(data.elementRef);
+    return null;
+  }
   if (data.selector) {
     try {
       await agent.waitForSelector(data.selector, 5000);
@@ -918,6 +991,10 @@ async function smartClick(agent, data, onLog, visionResolver) {
       // Try self healing first
       const healedSelector = await resolveSelectorFallback(agent, data.selector, data.intentFallback || data.description, onLog, visionResolver);
       if (healedSelector) {
+        if (healedSelector.startsWith('ref_') && agent._browserRuntime) {
+          await agent._browserRuntime.clickRef(healedSelector.slice(4));
+          return null;
+        }
         const index = parseInt(healedSelector.replace('index_', ''), 10);
         if (!isNaN(index)) {
           await agent.clickByIndex(index);
@@ -950,6 +1027,10 @@ async function smartClick(agent, data, onLog, visionResolver) {
 }
 
 async function smartType(agent, data, value, onLog, visionResolver) {
+  if (data.elementRef && agent._browserRuntime) {
+    await agent._browserRuntime.fillRef(data.elementRef, value);
+    return null;
+  }
   if (data.selector) {
     try {
       await agent.waitForSelector(data.selector, 5000);
@@ -959,6 +1040,10 @@ async function smartType(agent, data, value, onLog, visionResolver) {
       // Try self healing first
       const healedSelector = await resolveSelectorFallback(agent, data.selector, data.intentFallback || data.description, onLog, visionResolver);
       if (healedSelector) {
+        if (healedSelector.startsWith('ref_') && agent._browserRuntime) {
+          await agent._browserRuntime.fillRef(healedSelector.slice(4), value);
+          return null;
+        }
         const index = parseInt(healedSelector.replace('index_', ''), 10);
         if (!isNaN(index)) {
           await agent.typeByIndex(index, value);

@@ -33,7 +33,11 @@ import {
   Circle,
   Square,
   Target,
-  Tag
+  Tag,
+  PanelLeft,
+  Blocks,
+  Beaker,
+  UploadCloud
 } from 'lucide-react';
 import './Views.css';
 import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
@@ -41,9 +45,12 @@ import { chatCopilot, compilePrompt, runAiAnalysis } from '../lib/stanleyCloud';
 import { runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
 import { TriggersPanel } from '../components/TriggersPanel';
 import { getIntegrationLabel, getIntegrationsByApp } from '../lib/integrationsCatalog';
+import { WorkflowPlatformModal } from '../components/WorkflowPlatformModal';
+import { uploadArtifact } from '../lib/artifactClient';
 
 // Interface definitions matching the backend data structure
 interface NodeData {
+  [key: string]: any;
   url?: string;
   selector?: string;
   value?: string;
@@ -211,6 +218,18 @@ function WorkflowNodeComponent({ data, selected }: any) {
 
 const nodeTypes = {
   workflowNode: WorkflowNodeComponent
+};
+
+const advancedNodeFields: Record<string, Array<{ key: string; label: string; placeholder?: string }>> = {
+  scroll: [{ key: 'amount', label: 'Pixels (+ down / - up)', placeholder: '700' }, { key: 'selector', label: 'Or element selector' }],
+  find_text: [{ key: 'text', label: 'Text to find' }],
+  send_keys: [{ key: 'keys', label: 'Keyboard shortcut', placeholder: 'Control+Enter' }],
+  select_dropdown: [{ key: 'selector', label: 'Select selector' }, { key: 'description', label: 'Or accessible label' }, { key: 'value', label: 'Option value' }],
+  hover: [{ key: 'selector', label: 'Target selector' }, { key: 'description', label: 'Or element text' }],
+  drag_drop: [{ key: 'sourceSelector', label: 'Source selector' }, { key: 'targetSelector', label: 'Target selector' }],
+  upload_file: [{ key: 'artifactId', label: 'Tenant artifact ID' }, { key: 'selector', label: 'File input selector' }],
+  download_file: [{ key: 'selector', label: 'Download control selector' }, { key: 'description', label: 'Or control description' }],
+  mcp_tool: [{ key: 'serverUrl', label: 'MCP endpoint URL' }, { key: 'toolName', label: 'Tool name' }, { key: 'arguments', label: 'Arguments JSON', placeholder: '{}' }, { key: 'vaultKey', label: 'Token vault key' }],
 };
 
 const mapActionsToGraph = (actions: any[], prompt: string) => {
@@ -387,7 +406,11 @@ export function CockpitInner() {
     actionsApplied?: string[];
   }
   const [showChat, setShowChat] = useState(true);
+  const [showLibrary, setShowLibrary] = useState(true);
+  const [showNodePalette, setShowNodePalette] = useState(false);
   const [showTriggers, setShowTriggers] = useState(false);
+  const [showPlatform, setShowPlatform] = useState(false);
+  const [uploadingArtifact, setUploadingArtifact] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: '1', role: 'stanley', content: 'Hi! I\'m Stanley, your automation copilot. Tell me what you want to automate, or ask me to add/edit steps in your flow!' }
@@ -1159,7 +1182,7 @@ export function CockpitInner() {
     if (!confirm(`Are you sure you want to delete workflow "${name}"?`)) return;
     try {
       await deleteDoc('workflows', id);
-      setWorkflows(workflows.filter(w => w.id !== id));
+      setWorkflows((current) => current.filter(w => w.id !== id));
       if (selectedWorkflow?.id === id) {
         setSelectedWorkflow(null);
         setNodes([]);
@@ -1338,6 +1361,15 @@ export function CockpitInner() {
     else if (type === 'paginate') nodeData = { selector: '', description: '', maxPages: '3', actionNodeId: '' };
     else if (type === 'agent') nodeData = { goal: '', maxSteps: '8' };
     else if (type === 'integration') nodeData = { integrationName: 'gmail_list_messages', query: '' };
+    else if (type === 'scroll') nodeData = { amount: '700', selector: '' };
+    else if (type === 'find_text') nodeData = { text: '' };
+    else if (type === 'send_keys') nodeData = { keys: 'Enter' };
+    else if (type === 'select_dropdown') nodeData = { selector: '', description: '', value: '' };
+    else if (type === 'hover') nodeData = { selector: '', description: '' };
+    else if (type === 'drag_drop') nodeData = { sourceSelector: '', targetSelector: '' };
+    else if (type === 'upload_file') nodeData = { artifactId: '', selector: 'input[type="file"]' };
+    else if (type === 'download_file') nodeData = { selector: '', description: '' };
+    else if (type === 'mcp_tool') nodeData = { serverUrl: 'https://', toolName: '', vaultKey: '' };
     else nodeData = { selector: '' };
 
     const labelMap: Record<string, string> = {
@@ -1363,6 +1395,7 @@ export function CockpitInner() {
       paginate: 'Paginate Scrape',
       agent: 'Agent Mode',
       integration: 'API Integration'
+      , scroll: 'Scroll Page', find_text: 'Find Text', go_back: 'Browser Back', go_forward: 'Browser Forward', send_keys: 'Send Keys', select_dropdown: 'Select Dropdown', hover: 'Hover Element', drag_drop: 'Drag & Drop', upload_file: 'Upload Artifact', download_file: 'Download Artifact', mcp_tool: 'MCP Tool'
     };
 
     const newNode: MyRFNode = {
@@ -1537,7 +1570,7 @@ export function CockpitInner() {
         </div>
       </div>
 
-      <div className="stats-grid">
+      <div className="stats-grid cockpit-stats-grid">
         <div className="stat-card glass-panel">
           <div className="stat-title">Total Automations</div>
           <div className="stat-value">{workflows.length}</div>
@@ -1559,96 +1592,50 @@ export function CockpitInner() {
         </div>
       </div>
 
-      <div className="editor-workspace" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', gap: '1rem' }}>
+      <div className="editor-workspace cockpit-workspace">
         {/* Left Column: Monitor, Saved workflows list and logs history */}
-        <div className="glass-panel" style={{ width: '240px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '1.5rem', padding: '1rem', overflowY: 'auto' }}>
+        {showLibrary && <aside className="glass-panel cockpit-library">
           {/* Workflows Directory */}
-          <div className="data-table-container">
-            <h3 style={{ marginBottom: '0.75rem', fontSize: '0.95rem', borderBottom: '1px solid var(--border-strong)', paddingBottom: '0.5rem' }}>Workflows Directory</h3>
+          <div className="cockpit-panel-section">
+            <div className="cockpit-panel-heading"><div><h3>Automations</h3><span>{workflows.length} saved</span></div><button className="cockpit-icon-button" onClick={() => setShowLibrary(false)} title="Hide automations"><X size={14}/></button></div>
             {loading ? (
               <div className="loading-state"><Loader className="spinner"/> Loading workflows...</div>
             ) : workflows.length === 0 ? (
               <div className="empty-state">No workflows found. Create one to get started!</div>
             ) : (
-              <table className="data-table compact-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Steps</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflows.map((w) => (
-                    <tr 
-                      key={w.id} 
-                      onClick={() => loadWorkflowInEditor(w)} 
-                      style={{ cursor: 'pointer', background: selectedWorkflow?.id === w.id ? 'rgba(108, 71, 255, 0.07)' : 'transparent' }}
-                    >
-                      <td className="font-medium">{w.name}</td>
-                      <td>{w.nodes.length} nodes</td>
-                      <td>
-                        <div className="action-buttons" onClick={(e) => e.stopPropagation()} style={{ flexDirection: 'column', gap: '4px', alignItems: 'stretch' }}>
-                          <button className="btn btn-primary btn-sm" onClick={() => handleOpenRunModal(w)} title="Run Workflow" style={{ justifyContent: 'center' }}>
-                            <Play size={12} /> Run
-                          </button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => handleDeleteWorkflow(w.id, w.name)} title="Delete Workflow" style={{ justifyContent: 'center' }}>
-                            <Trash2 size={12} /> Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="workflow-card-list">{workflows.map((w) => (
+                <div key={w.id} className={`workflow-card ${selectedWorkflow?.id === w.id ? 'active' : ''}`} onClick={() => loadWorkflowInEditor(w)}>
+                  <div className="workflow-card-copy"><strong>{w.name || 'Untitled automation'}</strong><span>{w.nodes.length} step{w.nodes.length === 1 ? '' : 's'}</span></div>
+                  <div className="workflow-card-actions" onClick={(event) => event.stopPropagation()}>
+                    <button onClick={() => handleOpenRunModal(w)} title={`Run ${w.name}`}><Play size={13}/></button>
+                    <button className="danger" onClick={() => handleDeleteWorkflow(w.id, w.name)} title={`Delete ${w.name}`}><Trash2 size={13}/></button>
+                  </div>
+                </div>
+              ))}</div>
             )}
           </div>
 
           {/* Recent Runs Logs list */}
-          <div className="data-table-container">
-            <h3 style={{ marginBottom: '0.75rem', fontSize: '0.95rem', borderBottom: '1px solid var(--border-strong)', paddingBottom: '0.5rem' }}>Execution Logs & History</h3>
+          <div className="cockpit-panel-section cockpit-history">
+            <div className="cockpit-panel-heading"><div><h3>Recent runs</h3><span>{runs.length} total</span></div></div>
             {loading ? (
               <div className="loading-state"><Loader className="spinner"/> Loading runs...</div>
             ) : runs.length === 0 ? (
               <div className="empty-state">No execution logs found. Run an automation to see details.</div>
             ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Workflow</th>
-                    <th>Status</th>
-                    <th>Time</th>
-                    <th>Logs</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.slice(0, 10).map((r) => (
-                    <tr key={r.id}>
-                      <td className="font-medium">{r.workflowName}</td>
-                      <td>
-                        <span className={`badge badge-${r.status.toLowerCase()}`}>
-                          {r.status}
-                        </span>
-                      </td>
-                      <td>{r.timestamp.split(',')[1]?.trim() || r.timestamp}</td>
-                      <td>
-                        <button className="btn btn-secondary btn-sm" onClick={() => viewLogs(r)}>
-                          View Logs
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="run-card-list">{runs.slice(0, 8).map((r) => (
+                <button key={r.id} className="run-card" onClick={() => viewLogs(r)}><span><strong>{r.workflowName}</strong><small>{r.timestamp.split(',')[1]?.trim() || r.timestamp}</small></span><span className={`badge badge-${r.status.toLowerCase()}`}>{r.status}</span></button>
+              ))}</div>
             )}
           </div>
-        </div>
+        </aside>}
 
         {/* Center Column: Visual editor graph */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', minWidth: 0 }}>
+        <main className="cockpit-editor-column">
           {selectedWorkflow ? (
             <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-              <div className="editor-header" style={{ borderBottom: '1px solid var(--border-strong)', padding: '0.5rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="editor-header cockpit-editor-header">
+                {!showLibrary && <button className="cockpit-icon-button" onClick={() => setShowLibrary(true)} title="Show automations"><PanelLeft size={15}/></button>}
                 <input
                   className="font-medium workflow-name-input"
                   style={{ fontSize: '0.9rem', flex: 1, marginRight: '0.5rem', minWidth: 0 }}
@@ -1659,6 +1646,7 @@ export function CockpitInner() {
                   title="Click to rename this automation"
                 />
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className={`btn btn-sm ${showNodePalette ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setShowNodePalette((value) => !value)} title="Add a workflow step"><Blocks size={14}/> Add step</button>
                   <button 
                     className={`btn btn-sm ${showChat ? 'btn-primary' : 'btn-secondary'}`} 
                     style={showChat ? { background: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)', border: 'none', boxShadow: '0 0 10px rgba(168, 85, 247, 0.4)' } : {}}
@@ -1670,6 +1658,7 @@ export function CockpitInner() {
                   <button className="btn btn-secondary btn-sm" onClick={() => setShowTriggers(true)} title="Schedule this automation or expose a webhook">
                     <Clock size={14} /> Triggers
                   </button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setShowPlatform(true)} title="Test, version, and publish this workflow"><Beaker size={14}/> Test &amp; release</button>
                   <button className="btn btn-secondary btn-sm" onClick={handleSaveWorkflow}>
                     <Save size={14} /> Save Draft
                   </button>
@@ -1694,9 +1683,11 @@ export function CockpitInner() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <div className="cockpit-canvas-shell">
                 {/* Visual Editor sidebar for dragging nodes */}
-                <div style={{ width: '130px', padding: '0.5rem', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+                {showNodePalette && <div className="cockpit-node-palette">
+                  <div className="cockpit-node-palette-header"><div><strong>Add a step</strong><span>Click to place on canvas</span></div><button className="cockpit-icon-button" onClick={() => setShowNodePalette(false)}><X size={14}/></button></div>
+                  <div className="cockpit-node-grid">
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.45)' }} onClick={() => addNode('mission')}><Target size={12}/> Mission</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.45)' }} onClick={() => addNode('parameter')}><Tag size={12}/> Parameter</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('navigate')}><Globe size={12}/> Navigate</button>
@@ -1718,7 +1709,9 @@ export function CockpitInner() {
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)' }} onClick={() => addNode('paginate')}><RefreshCw size={12}/> Paginate</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.4)' }} onClick={() => addNode('agent')}><Sparkles size={12}/> Agent</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)' }} onClick={() => addNode('integration')}><Globe size={12}/> Integration</button>
-                </div>
+                  {['scroll','find_text','go_back','go_forward','send_keys','select_dropdown','hover','drag_drop','upload_file','download_file','mcp_tool'].map((type) => <button key={type} className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode(type)}><Blocks size={12}/>{type.replaceAll('_',' ')}</button>)}
+                  </div>
+                </div>}
 
                 {/* Canvas graph */}
                 <div className="editor-canvas canvas-bg" style={{ flex: 1, position: 'relative' }}>
@@ -1740,7 +1733,7 @@ export function CockpitInner() {
               </div>
 
               {/* Node properties bottom sheet */}
-              <div style={{ height: '140px', borderTop: '1px solid var(--border-strong)', padding: '0.5rem 1rem', overflowY: 'auto', background: 'var(--bg-surface-elevated)' }}>
+              {(currentNode || currentEdge) && <div className="cockpit-inspector">
                 {currentNode ? (
                   <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '150px' }}>
@@ -1847,6 +1840,40 @@ export function CockpitInner() {
                           onChange={(e) => updateNodeDataField('ms', e.target.value)} 
                         />
                       </div>
+                    )}
+
+                    {advancedNodeFields[currentNode.data.type]?.map((field) => (
+                      <div key={field.key} style={{ flex: 1, minWidth: '150px' }}>
+                        <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{field.label}</label>
+                        <input type="text" className="form-input" style={{ padding: '4px 8px', fontSize: '0.8rem' }} placeholder={field.placeholder} value={String(currentNode.data.data?.[field.key] ?? '')} onChange={(event) => updateNodeDataField(field.key, event.target.value)} />
+                      </div>
+                    ))}
+
+                    {currentNode.data.type === 'upload_file' && (
+                      <label className="form-input" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 190, cursor: uploadingArtifact ? 'wait' : 'pointer', padding: '6px 10px', fontSize: '0.75rem' }}>
+                        <UploadCloud size={14} />
+                        {uploadingArtifact ? 'Uploading artifact...' : 'Choose file (10 MiB max)'}
+                        <input
+                          type="file"
+                          disabled={uploadingArtifact}
+                          style={{ display: 'none' }}
+                          onChange={async (event) => {
+                            const file = event.target.files?.[0];
+                            if (!file) return;
+                            setUploadingArtifact(true);
+                            try {
+                              const artifact = await uploadArtifact(file);
+                              updateNodeDataField('artifactId', artifact.id);
+                              updateNodeDataField('artifactName', artifact.name);
+                            } catch (error) {
+                              window.alert(error instanceof Error ? error.message : 'Artifact upload failed.');
+                            } finally {
+                              setUploadingArtifact(false);
+                              event.target.value = '';
+                            }
+                          }}
+                        />
+                      </label>
                     )}
 
                     {currentNode.data.type === 'open_tab' && (
@@ -2301,12 +2328,8 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', paddingTop: '1.5rem', fontSize: '0.85rem' }}>
-                    Select a node or edge on the visual graph to configure its parameters.
-                  </div>
-                )}
-              </div>
+                ) : null}
+              </div>}
             </div>
           ) : (
             <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', textAlign: 'center', padding: '2rem' }}>
@@ -2317,11 +2340,11 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               </p>
             </div>
           )}
-        </div>
+        </main>
 
         {/* Right Column: Stanley Copilot (Always Visible!) */}
         {showChat && (
-          <div className="glass-panel chatbot-sidebar" style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%', padding: '0', overflow: 'hidden' }}>
+          <aside className="glass-panel chatbot-sidebar cockpit-copilot">
             <div className="chat-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#a855f7' }}>
                 <Sparkles size={16} />
@@ -2474,7 +2497,7 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                     : 'Send'}
               </button>
             </div>
-          </div>
+          </aside>
         )}
       </div>
 
@@ -2524,6 +2547,7 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
       {showTriggers && selectedWorkflow && (
         <TriggersPanel workflow={{ id: selectedWorkflow.id, name: selectedWorkflow.name }} onClose={() => setShowTriggers(false)} />
       )}
+      {showPlatform && selectedWorkflow && <WorkflowPlatformModal workflow={selectedWorkflow} onClose={() => setShowPlatform(false)} />}
 
       {/* Logs Details Modal */}
       {activeRun && (

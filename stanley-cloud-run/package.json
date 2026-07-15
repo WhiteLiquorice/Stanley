@@ -7,8 +7,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/runnerAdapter.js && node --check src/contextualRunner.js && node --check src/dispatcher.js && node --check src/runLifecycle.js && node --check src/workflowContract.js && node --check scripts/patchEngine.js && node --check scripts/auditWorkflows.js",
-    "test": "node test/workflowContract.test.js && node test/runLifecycle.test.js",
+    "check": "node --check branchingEngine.js && node --check visionResolver.js && node --check src/server.js && node --check src/runnerAdapter.js && node --check src/contextualRunner.js && node --check src/dispatcher.js && node --check src/runLifecycle.js && node --check src/workflowContract.js && node --check src/browser-runtime/accessibility.js && node --check src/browser-runtime/encryption.js && node --check src/browser-runtime/lifecycle.js && node --check src/browser-runtime/store.js && node --check src/browser-runtime/trace.js && node --check src/browser-runtime/takeover.js && node --check src/browser-runtime/runtime.js && node --check src/browser-runtime/routes.js && node --check src/artifact-engine/service.js && node --check src/artifact-engine/routes.js && node --check src/workflow-platform/contract.js && node --check src/workflow-platform/debug.js && node --check src/workflow-platform/clients.js && node --check src/workflow-platform/store.js && node --check src/workflow-platform/service.js && node --check src/workflow-platform/routes.js && node --check src/mcp-engine/client.js && node --check src/mcp-engine/service.js && node --check src/mcp-engine/routes.js && node --check src/template-engine/artifact.js && node --check src/template-engine/store.js && node --check src/template-engine/service.js && node --check src/template-engine/routes.js && node --check scripts/patchEngine.js && node --check scripts/auditWorkflows.js",
+    "test": "node --test test/*.test.js",
     "audit:workflows": "node scripts/auditWorkflows.js",
     "check:engine-patch": "node scripts/patchEngine.js --check"
   },

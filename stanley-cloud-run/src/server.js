@@ -19,8 +19,13 @@ const { installMemoryOverlay } = require('./runner-integration/src/memoryExecuti
 const { installMonitoringOverlay } = require('./runner-integration/src/monitoringExecution');
 const { executeTrustedWorkflow } = require('./runner-integration/src/trustedExecution');
 const { createTrustRouter } = require('./trust-engine');
+const { FirestoreTemplateStore, TemplateService, createTemplateRouter } = require('./template-engine');
 const { callConnectorModel } = require('./vertexConnectorModel');
 const { proposeRepairOperations } = require('./vertexLearningModel');
+const { createBrowserRuntimeRouter, getBrowserRuntimeServices } = require('./browser-runtime');
+const { ArtifactService, createArtifactRouter } = require('./artifact-engine');
+const { WorkflowPlatformStore, WorkflowPlatformService, createWorkflowPlatformRouter, validateWorkflowInput, validateWorkflowOutput } = require('./workflow-platform');
+const { McpService, installMcpRoutes } = require('./mcp-engine');
 
 const projectId = process.env.STANLEY_PROJECT_ID || 'bridgeway-db29e';
 const internalKey = process.env.RUNNER_INTERNAL_KEY || '';
@@ -31,7 +36,10 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 const runs = new RunStore(db);
+const artifactService = new ArtifactService({ db, bucket: admin.storage().bucket(process.env.ARTIFACT_BUCKET || undefined) });
 const app = express();
+// A 10 MiB binary artifact expands to roughly 13.4 MiB as base64.
+app.use('/v1/artifacts', express.json({ limit: '15mb' }));
 app.use(express.json({ limit: '2mb' }));
 
 app.use((req, res, next) => {
@@ -40,8 +48,8 @@ app.use((req, res, next) => {
     res.set('Access-Control-Allow-Origin', origin);
     res.set('Vary', 'Origin');
   }
-  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Idempotency-Key, X-Stanley-Internal-Key');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Idempotency-Key, X-Stanley-Internal-Key, X-Stanley-Takeover-Token, X-Stanley-MCP-Key');
   if (req.method === 'OPTIONS') return res.status(204).send();
   next();
 });
@@ -81,9 +89,13 @@ async function loadWorkflow(uid, workflowId) {
   return { id: doc.id, ...doc.data() };
 }
 
-async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idempotencyKey = '' } = {}) {
+async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idempotencyKey = '', releaseId = null } = {}) {
   const workflow = await loadWorkflow(uid, workflowId);
-  const { policy } = validateWorkflow(workflow);
+  const selectedReleaseId = releaseId || (trigger === 'Manual' ? null : workflow.activeProductionReleaseId || null);
+  const executionSource = selectedReleaseId ? await workflowPlatform.store.getRelease(uid, workflowId, selectedReleaseId) : workflow;
+  if (!executionSource) throw httpError(409, 'Selected workflow release is unavailable.');
+  const { policy } = validateWorkflow(executionSource);
+  validateWorkflowInput(executionSource, input);
   const id = makeRunId(uid, workflowId, idempotencyKey);
   const approvalRequired = requiresPreflightApproval(workflow);
   const now = new Date().toISOString();
@@ -97,6 +109,7 @@ async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idem
     input,
     logs: approvalRequired ? ['[System] Run is waiting for approval before execution.'] : ['[System] Run queued.'],
     executionPolicy: policy,
+    releaseId: selectedReleaseId,
     attempts: 0,
     createdAt: now,
     updatedAt: now,
@@ -105,16 +118,33 @@ async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idem
   });
 }
 
+let templateService = null;
+const promoteConnectorTemplate = async (uid, connector) => {
+  try { return templateService ? await templateService.fromConnector(uid, connector.connectorId, connector.version, { createdBy: uid }) : null; }
+  catch (error) { if (!/already exists/i.test(error.message)) console.error('[Templates] Connector promotion failed:', error); return null; }
+};
+const promoteSkillTemplate = async (uid, skill) => {
+  try { return templateService ? await templateService.fromSkill(uid, skill.skillId, skill.version, { createdBy: uid }) : null; }
+  catch (error) { if (!/already exists/i.test(error.message)) console.error('[Templates] Skill promotion failed:', error); return null; }
+};
+
 const connectorOverlay = installConnectorOverlay({
   app, db, authenticateUser, resolveAllSecrets: resolveSecrets,
   callModel: callConnectorModel,
   logger: (event) => console.log(JSON.stringify({ component: 'connector-engine', ...event })),
+  onPublished: promoteConnectorTemplate,
 });
 
 const skillOverlay = installSkillOverlay({
   app, db, authenticateUser, runWorkflow: runWorkflowWithContext,
   trustStore: connectorOverlay.trustStore, resolveAllSecrets: resolveSecrets,
+  onActivated: promoteSkillTemplate,
+  artifactService,
 });
+
+const templateAdmins = new Set((process.env.TEMPLATE_PUBLICATION_ADMINS || '').split(',').map((uid) => uid.trim()).filter(Boolean));
+templateService = new TemplateService({ store: new FirestoreTemplateStore(db), connectorStore: connectorOverlay.service.store, skillStore: skillOverlay.service.store, publicPublisher: (uid) => templateAdmins.has(uid) });
+app.use('/v1/templates', async (req, res, next) => { try { req.uid = await authenticateUser(req); next(); } catch (error) { res.status(error.status || 401).json({ success: false, error: error.message }); } }, createTemplateRouter({ express, service: templateService, requireUser: (req) => req.uid }));
 
 const orchestrationOverlay = installOrchestrationOverlay({
   app, db, authenticateUser, authenticateInternal,
@@ -124,13 +154,18 @@ const orchestrationOverlay = installOrchestrationOverlay({
 const learningOverlay = installLearningOverlay({ app, express, db, authenticateUser, proposeOperations: proposeRepairOperations });
 const memoryOverlay = installMemoryOverlay({ app, express, db, authenticateUser });
 const monitoringOverlay = installMonitoringOverlay({ app, express, db, authenticateUser, authenticateInternal, connectorService: connectorOverlay.service, resolveAllSecrets: resolveSecrets, trustStore: connectorOverlay.trustStore });
+const browserRuntimeServices = getBrowserRuntimeServices(db);
+app.use(createBrowserRuntimeRouter({ express, authenticateUser, services: browserRuntimeServices, handleError: errorResponse }));
+app.use(createArtifactRouter({ express, authenticateUser, service: artifactService, handleError: errorResponse }));
+const workflowPlatform = new WorkflowPlatformService({ store: new WorkflowPlatformStore(db), loadWorkflow });
 
 async function executeRun(uid, runId) {
   let run = await runs.get(uid, runId);
   if (!run) throw httpError(404, 'Run not found.');
   if (!EXECUTABLE_STATES.has(run.state)) return publicRun(run);
 
-  const workflow = await loadWorkflow(uid, run.workflowId);
+  let workflow = await loadWorkflow(uid, run.workflowId);
+  if (run.releaseId) workflow = await workflowPlatform.store.getRelease(uid, run.workflowId, run.releaseId) || workflow;
   const { policy } = validateWorkflow(workflow);
   let executableWorkflow = prepareApprovedWorkflow(workflow, Boolean(run.approvedAt));
   const startedAtMs = Date.now();
@@ -171,7 +206,7 @@ async function executeRun(uid, runId) {
       result = await executeTrustedWorkflow({
         store: connectorOverlay.trustStore, uid, runId, workflow: executableWorkflow,
         secrets, input: run.input || {}, runRecord: run, runner: runWorkflowWithContext,
-        runnerOptions: { db, uid, runId, policy, connectorRuntime: connectorOverlay.connectorRuntime, orchestration },
+        runnerOptions: { db, uid, runId, policy, connectorRuntime: connectorOverlay.connectorRuntime, orchestration, artifactService },
         trustMode: executableWorkflow.trustPolicy?.mode || 'live',
         resumeCheckpoint: run.resumeCheckpoint || null,
       });
@@ -191,10 +226,12 @@ async function executeRun(uid, runId) {
       duration: `${Math.round((Date.now() - startedAtMs) / 1000)}s`,
       logs: result.logs || [],
       scraped: result.scraped || {},
+      output: validateWorkflowOutput(executableWorkflow, result.scraped || {}),
       trustState: result.trustState,
       trustMode: result.trustMode,
       trustReport: result.trustReport,
       skillExecution: result.skillExecution || null,
+      modelUsage: result.modelUsage || null,
     });
     return publicRun(run);
   } catch (error) {
@@ -348,6 +385,40 @@ app.post('/run', async (req, res) => {
     });
   } catch (error) { return errorResponse(res, error); }
 });
+
+// Stable external invocation always executes the promoted production release.
+app.post('/v1/workflows/:workflowId/invoke', async (req, res) => {
+  try {
+    const uid = await authenticateUser(req);
+    const workflow = await loadWorkflow(uid, req.params.workflowId);
+    if (!workflow.activeProductionReleaseId) throw httpError(409, 'Promote a tested release to production before invoking this workflow.');
+    const run = await submitRun(uid, req.params.workflowId, {
+      input: req.body?.input || {}, trigger: 'API', idempotencyKey: String(req.headers['x-idempotency-key'] || ''),
+      releaseId: workflow.activeProductionReleaseId,
+    });
+    return res.status(['queued', 'pending_approval', 'retrying'].includes(run.state) ? 202 : 200).json({ success: run.state === 'completed', run });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+async function executeDebugWorkflow(uid, workflow, { input = {}, runId } = {}) {
+  const { policy } = validateWorkflow(workflow);
+  validateWorkflowInput(workflow, input);
+  const secrets = await resolveSecrets(db, uid);
+  return runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy: { ...policy, allowAgenticRecovery: false }, artifactService });
+}
+
+app.use(createWorkflowPlatformRouter({
+  express, authenticateUser, service: workflowPlatform, loadWorkflow,
+  executeDebug: executeDebugWorkflow,
+  replayRun: async (uid, sourceRunId) => {
+    const source = await runs.get(uid, sourceRunId); if (!source) throw httpError(404, 'Source run not found.');
+    return submitRun(uid, source.workflowId, { input: source.input || {}, trigger: 'Replay', idempotencyKey: `replay:${sourceRunId}:${Date.now()}`, releaseId: source.releaseId || null });
+  },
+  publicBaseUrl: process.env.RUNNER_PUBLIC_URL || process.env.RUNNER_SERVICE_URL || '', handleError: errorResponse,
+}));
+
+const mcpService = new McpService({ db, loadWorkflow, submitRun });
+installMcpRoutes({ app, authenticateUser, service: mcpService, handleError: errorResponse });
 
 const port = Number(process.env.PORT || 8080);
 app.listen(port, () => console.log(`Stanley cloud API listening on :${port} (${dispatcher.mode})`));

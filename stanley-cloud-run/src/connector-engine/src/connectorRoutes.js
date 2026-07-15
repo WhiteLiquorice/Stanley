@@ -1,6 +1,6 @@
 const express = require('express');
 
-function createConnectorRouter({ service, resolveSecrets, requireUser = (req) => req.uid }) {
+function createConnectorRouter({ service, resolveSecrets, requireUser = (req) => req.uid, onPublished = null }) {
   if (!service) throw new Error('Connector router requires a service.');
   const router = express.Router();
   router.use(express.json({ limit: '512kb' }));
@@ -12,7 +12,7 @@ function createConnectorRouter({ service, resolveSecrets, requireUser = (req) =>
   router.post('/:connectorId/versions/:version/inspect', handler(async (uid, req, res) => res.json({ success: true, connector: await service.inspect(uid, req.params.connectorId, req.params.version) })));
   router.post('/:connectorId/versions/:version/test', handler(async (uid, req, res) => { const artifact = await service.requireVersion(uid, req.params.connectorId, req.params.version); const secrets = resolveSecrets ? await resolveSecrets(uid, artifact.requiredVaultRefs) : {}; res.json({ success: true, connector: await service.test(uid, req.params.connectorId, req.params.version, secrets) }); }));
   router.post('/:connectorId/versions/:version/approve', handler(async (uid, req, res) => res.json({ success: true, connector: await service.approve(uid, req.params.connectorId, req.params.version, { uid, type: 'human', note: req.body?.note || '' }) })));
-  router.post('/:connectorId/versions/:version/publish', handler(async (uid, req, res) => res.json({ success: true, connector: await service.publish(uid, req.params.connectorId, req.params.version) })));
+  router.post('/:connectorId/versions/:version/publish', handler(async (uid, req, res) => { const connector = await service.publish(uid, req.params.connectorId, req.params.version); const template = onPublished ? await onPublished(uid, connector) : null; res.json({ success: true, connector, template }); }));
   router.post('/:connectorId/versions/:version/execute', handler(async (uid, req, res) => { const artifact = await service.requireVersion(uid, req.params.connectorId, req.params.version); const secrets = resolveSecrets ? await resolveSecrets(uid, artifact.requiredVaultRefs) : {}; const result = await service.execute({ tenantId: uid, connectorId: req.params.connectorId, version: req.params.version, input: req.body?.input || {}, secrets, mode: req.body?.mode }); res.json({ success: true, result }); }));
   router.post('/:connectorId/versions/:version/repairs', handler(async (uid, req, res) => res.status(201).json({ success: true, proposal: await service.proposeRepair(uid, req.params.connectorId, req.params.version, req.body?.failureFingerprint) })));
   router.post('/:connectorId/versions/:version/repairs/:proposalId/apply', handler(async (uid, req, res) => res.status(201).json({ success: true, connector: await service.applyStoredRepair(uid, req.params.connectorId, req.params.version, req.params.proposalId) })));
