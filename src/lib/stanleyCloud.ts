@@ -84,7 +84,7 @@ function cleanJson(text: string): string {
 
 // ── System prompts (shared between paths) ───────────────────────────────────────
 
-const COMPILE_SYSTEM = `You are the brain of Project Stanley, a local browser automation butler.
+const COMPILE_SYSTEM = `You are the constrained planning layer of Project Stanley, a hybrid browser and API automation system.
 Your task is to take a natural language request from a user and translate it into a structured, step-by-step sequence of automation actions in JSON format.
 
 Available actions you can output:
@@ -285,6 +285,7 @@ export interface WorkflowEdge {
 }
 
 export interface CompiledWorkflow {
+  id: string;
   name: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -292,12 +293,9 @@ export interface CompiledWorkflow {
 
 export function getExecutionTier(nodeType: string): 'local' | 'browser' | 'agent' {
   switch (nodeType) {
-    case 'js_code':
     case 'wait':
     case 'parameter':
     case 'mission':
-    case 'label':
-    case 'goto':
     case 'integration':
     case 'webhook_trigger':
     case 'schedule_trigger':
@@ -316,6 +314,7 @@ export function getExecutionTier(nodeType: string): 'local' | 'browser' | 'agent
     case 'vision':
     case 'approval':
     case 'ai_agent':
+    case 'agent':
       return 'agent';
     default:
       return 'browser';
@@ -324,7 +323,7 @@ export function getExecutionTier(nodeType: string): 'local' | 'browser' | 'agent
 
 export async function compileWorkflow(prompt: string): Promise<CompiledWorkflow> {
   const lmKey = await getLmStudioKey();
-  const systemPrompt = `You are the brain of Project Stanley, a local browser automation butler.
+  const systemPrompt = `You are the constrained planning layer of Project Stanley, a hybrid browser and API automation system.
 Your task is to take a natural language request from a user and translate it into a structured, step-by-step automation workflow containing nodes and edges.
 
 Available node types:
@@ -338,15 +337,21 @@ Available node types:
 8. switch_tab: Switch to a tab. Data: { "index": "tab index as string" }
 9. close_tab: Close a tab. Data: { "index": "tab index as string" }
 10. if: Condition fork. Data: { "condition": { "type": "contains|equals|exists", "value": "check value", "variable": "check variable" } }
-11. js_code: Execute custom JS. Data: { "code": "JS code block" }
-12. ai_prompt: Run AI Gemini prompt. Data: { "prompt": "AI prompt text" }
-13. mission: Super-node storing the overall request goal. Connect to start node with context edge. Data: { "prompt": "User's goal" }
-14. parameter: Sub-node storing parameter inputs. Connect to target step with context edge. Data: { "value": "parameter value" }
-15. integration: Call a 3rd party API natively. Supported "integrationName" values:
+11. ai_prompt: Run an AI prompt. Data: { "prompt": "AI prompt text" }
+12. mission: Super-node storing the overall request goal. Connect to start node with context edge. Data: { "prompt": "User's goal" }
+13. parameter: Sub-node storing parameter inputs. Connect to target step with context edge. Data: { "value": "parameter value" }
+14. integration: Call a 3rd party API natively. Supported "integrationName" values:
   ${getPromptIntegrationList()}
-16. ai_agent: Autonomous AI Agent. Data: { "role": "Agent role", "goal": "Agent goal" }
+15. agent: Bounded browser planner. Data: { "goal": "Agent goal", "maxSteps": "1-8" }
+16. approval: Human approval checkpoint immediately before a side effect. Data: { "context": "What the operator is approving" }
+17. scroll_until: Scroll a window or nested feed until enough repeated items are loaded. Data: { "containerSelector": "optional scroll container", "itemSelector": "repeated item selector", "targetCount": "count", "maxScrolls": "bounded count" }
+18. dom_extract_list: Deterministically extract repeated DOM records including href/src attributes. Data: { "itemSelector": "repeated item selector", "fields": "JSON object mapping names to selector/attribute specs", "dedupeBy": "field name", "maxItems": "bounded count" }
+19. visit_each: Visit each URL from an earlier list and merge deterministic detail fields. Data: { "sourceNodeId": "list node id", "urlField": "URL field", "fields": "JSON object", "maxItems": "bounded count" }
+20. filter_list: Select records using explicit AI criteria. Data: { "sourceNodeId": "list node id", "criteria": "selection rules", "schema": "JSON array shape" }
+21. assertion: Fail the run unless a list satisfies its promised count and fields. Data: { "sourceNodeId": "list node id", "minItems": "minimum count", "requiredFields": "comma-separated fields", "uniqueBy": "optional unique field" }
 
 CRITICAL RULE: Every single generated workflow MUST contain exactly one 'mission' node that describes the user's overall goal. Connect this mission node to the starting trigger node using a context edge (set "kind": "context" in the edge definition).
+CRITICAL RULE: Put an approval node immediately before any integration write or browser action that submits, publishes, deletes, sends, purchases, or otherwise creates an external side effect. Never emit custom-code, goto, label, or recorder nodes.
 
 Return the final compiled workflow graph matching the requested schema.`;
 
@@ -376,10 +381,30 @@ Return the final compiled workflow graph matching the requested schema.`;
                 goal: { type: "STRING" },
                 prompt: { type: "STRING" },
                 system: { type: "STRING" },
-                code: { type: "STRING" },
                 integrationName: { type: "STRING" },
                 query: { type: "STRING" },
-                role: { type: "STRING" }
+                role: { type: "STRING" },
+                maxSteps: { type: "STRING" },
+                context: { type: "STRING" },
+                containerSelector: { type: "STRING" },
+                itemSelector: { type: "STRING" },
+                uniqueByAttribute: { type: "STRING" },
+                targetCount: { type: "STRING" },
+                maxScrolls: { type: "STRING" },
+                scrollAmount: { type: "STRING" },
+                settleMs: { type: "STRING" },
+                fields: { type: "STRING" },
+                dedupeBy: { type: "STRING" },
+                maxItems: { type: "STRING" },
+                sourceNodeId: { type: "STRING" },
+                urlField: { type: "STRING" },
+                criteria: { type: "STRING" },
+                schema: { type: "STRING" },
+                minItems: { type: "STRING" },
+                requiredFields: { type: "STRING" },
+                uniqueBy: { type: "STRING" },
+                dropIncomplete: { type: "STRING" },
+                outputLimit: { type: "STRING" }
               }
             }
           },
@@ -408,7 +433,8 @@ Return the final compiled workflow graph matching the requested schema.`;
       `Translate this user prompt into a structured workflow matching the schema:\n"${prompt}"`,
       lmKey
     );
-    return JSON.parse(cleanJson(text)) as CompiledWorkflow;
+    const workflow = JSON.parse(cleanJson(text)) as Omit<CompiledWorkflow, 'id'> & { id?: string };
+    return { ...workflow, id: workflow.id || crypto.randomUUID() };
   }
 
   // Use Firebase AI Logic (Vertex AI client SDK)
@@ -434,6 +460,6 @@ Return the final compiled workflow graph matching the requested schema.`;
   });
 
   const text = response.response.text();
-  return JSON.parse(cleanJson(text)) as CompiledWorkflow;
+  const workflow = JSON.parse(cleanJson(text)) as Omit<CompiledWorkflow, 'id'> & { id?: string };
+  return { ...workflow, id: workflow.id || crypto.randomUUID() };
 }
-

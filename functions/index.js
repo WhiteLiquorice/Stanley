@@ -280,7 +280,7 @@ exports.stripeWebhook = onRequest({ cors: true, secrets: [stripeSecretKey, strip
     if (process.env.FUNCTIONS_EMULATOR === 'true') {
       event = req.body;
     } else {
-      event = stripe.webhooks.constructEvent(req.rawBody, sig, process.env.STRIPE_WEBHOOK_SECRET)
+      event = stripe.webhooks.constructEvent(req.rawBody, sig, stripeWebhookSecret.value() || process.env.STRIPE_WEBHOOK_SECRET)
     }
   } catch (err) { return res.status(400).send(`Webhook Error: ${err.message}`) }
   
@@ -367,10 +367,12 @@ exports.stripeWebhook = onRequest({ cors: true, secrets: [stripeSecretKey, strip
       }
       
       if (uid) {
-        await db.collection('users').doc(uid).set({
+        await db.collection('stanley_users').doc(uid).set({
           email,
           status: 'active',
           paid: true,
+          stripe_customer_id: customerId || null,
+          stripe_subscription_id: session.subscription || null,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
         console.log(`[Stripe Webhook] Activated existing user ${uid} via email match.`);
@@ -379,6 +381,8 @@ exports.stripeWebhook = onRequest({ cors: true, secrets: [stripeSecretKey, strip
           email,
           status: 'active',
           paid: true,
+          stripe_customer_id: customerId || null,
+          stripe_subscription_id: session.subscription || null,
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
         console.log(`[Stripe Webhook] Stored pending payment document for email: ${email}`);
@@ -509,6 +513,19 @@ exports.stripeWebhook = onRequest({ cors: true, secrets: [stripeSecretKey, strip
         } catch (alertErr) {
           console.error('Failed to send provisioning alert email:', alertErr)
         }
+      }
+    }
+  }
+
+  if (['customer.subscription.updated', 'customer.subscription.deleted', 'invoice.payment_failed'].includes(event.type)) {
+    const object = event.data.object
+    const customerId = typeof object.customer === 'string' ? object.customer : object.customer?.id
+    if (customerId) {
+      const matches = await db.collection('stanley_users').where('stripe_customer_id', '==', customerId).limit(1).get()
+      if (!matches.empty) {
+        const subscriptionStatus = event.type === 'invoice.payment_failed' ? 'past_due' : object.status
+        const paid = ['active', 'trialing'].includes(subscriptionStatus)
+        await matches.docs[0].ref.set({ status: paid ? 'active' : subscriptionStatus || 'free', paid, subscriptionStatus: subscriptionStatus || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
       }
     }
   }
@@ -1331,11 +1348,12 @@ exports.askStanleyAI = onCall({ cors: true, secrets: [geminiApiKey], maxInstance
     throw new HttpsError('unauthenticated', 'User must be logged in to use Project Stanley AI.')
   }
 
-  // Double check that the user has an active Stanley license in Firestore
+  // Free and paid Stanley accounts may use the constrained AI planner. Run
+  // entitlements are enforced by the cloud runner, not by browser-owned state.
   const uid = request.auth.uid
   const userDoc = await admin.firestore().collection('stanley_users').doc(uid).get()
-  if (!userDoc.exists || userDoc.data().status !== 'active') {
-    throw new HttpsError('permission-denied', 'No active Project Stanley license found for this user.')
+  if (!userDoc.exists || ['disabled', 'suspended'].includes(userDoc.data().status)) {
+    throw new HttpsError('permission-denied', 'This Project Stanley account is not available.')
   }
 
   const { mode, prompt, elements, stepDescription, screenshotBase64, missionContext } = request.data
@@ -1731,5 +1749,3 @@ ${typeof schema === 'object' ? JSON.stringify(schema, null, 2) : String(schema)}
 const stanleyTriggers = require('./stanleyTriggers.js')
 exports.stanleyScheduleTick = stanleyTriggers.stanleyScheduleTick
 exports.stanleyWebhook = stanleyTriggers.stanleyWebhook
-
-

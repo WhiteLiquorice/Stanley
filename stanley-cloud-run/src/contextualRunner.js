@@ -3,6 +3,7 @@ const { executeGraph } = require('../branchingEngine.js');
 const visionResolver = require('../visionResolver.js');
 const { BrowserRunRuntime, getBrowserRuntimeServices } = require('./browser-runtime');
 const { normalizeModelPolicy } = require('./workflow-platform');
+const { commitMonitorCandidates, recordSelectorProposal } = require('./reliability');
 
 class WorkflowPausedForApproval extends Error {
   constructor(message, logs) {
@@ -10,6 +11,11 @@ class WorkflowPausedForApproval extends Error {
     this.name = 'WorkflowPausedForApproval';
     this.logs = logs;
   }
+}
+
+const BROWSER_NODE_TYPES = new Set(['navigate', 'click', 'type', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent', 'ai_agent', 'scroll', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown', 'hover', 'drag_drop', 'upload_file', 'download_file', 'monitor', 'vision']);
+function workflowNeedsBrowser(workflow) {
+  return (workflow.nodes || []).some((node) => BROWSER_NODE_TYPES.has(node.type) || (node.type === 'trigger' && Boolean(node.data?.url)));
 }
 
 function createEngineDb(db, uid) {
@@ -22,7 +28,7 @@ function createEngineDb(db, uid) {
   };
 }
 
-async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog, connectorRuntime = null, connectorApproval = null, trust = null, orchestration = null, artifactService = null } = {}) {
+async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy = {}, onLog: reportLog, connectorRuntime = null, connectorApproval = null, trust = null, orchestration = null, artifactService = null, onLeaseHeartbeat = null, effectLedgerEnabled = false, skipCompletedNodes = false, twoPhaseMonitors = false, safeEgress = false, providerResilience = false, traceBatching = false, selectorQuarantine = false, distributedBrowserLeases = false } = {}) {
   const logs = [];
   const onLog = (line) => {
     logs.push(line);
@@ -31,16 +37,19 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
   };
   const routedVision = visionResolver.createRoutedResolver(normalizeModelPolicy(workflow), (usage) => onLog(`[Model] ${usage.purpose} via ${usage.model}${usage.fallback ? ' (fallback)' : ''} in ${usage.durationMs}ms.`));
 
+  const needsBrowser = workflowNeedsBrowser(workflow);
   const hasStartUrl = (workflow.nodes || []).some((node) =>
     ['trigger', 'navigate', 'open_tab'].includes(node.type) &&
     node.data?.url && !['https://', 'http://'].includes(node.data.url)
   );
-  if (!hasStartUrl) throw new Error('Workflow has no valid starting URL.');
+  if (needsBrowser && !hasStartUrl) throw new Error('Browser workflow has no valid starting URL.');
 
   const browserRuntime = db && uid && runId ? new BrowserRunRuntime({
     services: getBrowserRuntimeServices(db), uid, runId, workflowId: workflow.id,
     sessionId: workflow.browserSessionId || workflow.id,
     sessionRetentionDays: workflow.browserPolicy?.sessionRetentionDays || 30,
+    traceBatching,
+    distributedBrowserLeases,
   }) : null;
   const agent = new StanleyFoundationEnhanced({
     headless: true,
@@ -81,10 +90,22 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
       orchestration,
       browserRuntime,
       artifactService,
+      onLeaseHeartbeat,
+      effectLedgerEnabled,
+      skipCompletedNodes,
+      twoPhaseMonitors,
+      safeEgress,
+      providerResilience,
       allowAgenticRecovery: policy.allowAgenticRecovery === true,
-      maxSteps: 1000,
+      maxSteps: policy.maxGraphSteps || 500,
+      deadlineAtMs: Date.now() + Number(policy.maxExecutionMs || 5 * 60 * 1000),
       onSelfHealed: async (nodeId, healedSelector) => {
         if (!db || !uid || !workflow.id) return;
+        if (selectorQuarantine) {
+          const proposal = await recordSelectorProposal(db, uid, workflow.id, nodeId, healedSelector, runId);
+          onLog(`[Memory] Observed selector candidate for node "${nodeId}" (${proposal.observations} successful recovery observation(s)); awaiting promotion.`);
+          return;
+        }
         const ref = db.collection('stanley_users').doc(uid).collection('workflows').doc(workflow.id);
         const snapshot = await ref.get();
         if (!snapshot.exists) return;
@@ -114,6 +135,10 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
       },
     });
     onLog('[Runner] Workflow completed successfully.');
+    if (twoPhaseMonitors) {
+      const commits = await commitMonitorCandidates(db, uid, runId);
+      if (commits.length) onLog(`[Monitor] Committed ${commits.filter((item) => item.status === 'committed').length} successful baseline update(s).`);
+    }
     runtimeOutcome = 'completed';
     return { logs, scraped, modelUsage: routedVision.usage, modelCalls: routedVision.usage.calls };
   } catch (error) {
@@ -130,4 +155,4 @@ async function runWorkflowWithContext(workflow, secrets, input, { db, uid, runId
   }
 }
 
-module.exports = { WorkflowPausedForApproval, runWorkflowWithContext };
+module.exports = { BROWSER_NODE_TYPES, WorkflowPausedForApproval, runWorkflowWithContext, workflowNeedsBrowser };

@@ -32,6 +32,16 @@ class BrowserRuntimeStore {
     await this.run(uid, runId).collection('browserTrace').doc(id).set(event);
     return event;
   }
+  async appendTraceBatch(uid, runId, events) {
+    if (!events.length) return [];
+    const batch = this.db.batch();
+    for (const event of events) {
+      const id = `${String(event.sequence || 0).padStart(6, '0')}-${crypto.randomBytes(4).toString('hex')}`;
+      batch.set(this.run(uid, runId).collection('browserTrace').doc(id), event);
+    }
+    await batch.commit();
+    return events;
+  }
   async listTrace(uid, runId, limit = 500) {
     const snapshot = await this.run(uid, runId).collection('browserTrace').limit(Math.min(Math.max(Number(limit || 500), 1), 1000)).get();
     return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((left, right) => Number(left.sequence) - Number(right.sequence));

@@ -1,2 +1,13 @@
-function createMemoryRouter({ express, service, requireUser }) { const router = express.Router(); const handle = (fn) => async (req, res) => { try { const uid = await requireUser(req); await fn(uid, req, res); } catch (error) { res.status(error.status || 422).json({ success: false, error: error.message }); } }; router.get('/', handle(async (uid, req, res) => res.json({ success: true, ...(await service.retrieve(uid, { workflowId: req.query.workflowId, operationName: req.query.operationName, targetDomain: req.query.targetDomain }, { limit: req.query.limit })) }))); router.post('/', handle(async (uid, req, res) => res.status(201).json({ success: true, memory: await service.create(uid, { ...req.body, provenance: { type: 'user', uid } } ) }))); router.post('/:id/approve', handle(async (uid, req, res) => res.json({ success: true, memory: await service.approve(uid, req.params.id, { type: 'human', uid }) }))); router.delete('/:id', handle(async (uid, req, res) => { await service.delete(uid, req.params.id); res.status(204).send(); })); return router; }
+function createMemoryRouter({ express, service, requireUser }) {
+  const router = express.Router();
+  const handle = (fn) => async (req, res) => { try { const uid = await requireUser(req); await fn(uid, req, res); } catch (error) { res.status(error.status || 422).json({ success: false, error: error.message }); } };
+  router.get('/', handle(async (uid, req, res) => {
+    if (req.query.all === 'true') return res.json({ success: true, memories: await service.store.list(uid), conflicts: [] });
+    return res.json({ success: true, ...(await service.retrieve(uid, { workflowId: req.query.workflowId, operationName: req.query.operationName, targetDomain: req.query.targetDomain }, { limit: req.query.limit })) });
+  }));
+  router.post('/', handle(async (uid, req, res) => res.status(201).json({ success: true, memory: await service.create(uid, { ...req.body, provenance: { type: 'user', uid } }) })));
+  router.post('/:id/approve', handle(async (uid, req, res) => res.json({ success: true, memory: await service.approve(uid, req.params.id, { type: 'human', uid }) })));
+  router.delete('/:id', handle(async (uid, req, res) => { await service.delete(uid, req.params.id); res.status(204).send(); }));
+  return router;
+}
 module.exports = { createMemoryRouter };

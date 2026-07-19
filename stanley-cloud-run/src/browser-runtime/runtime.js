@@ -2,15 +2,16 @@ const { AccessibilityReferenceMap, captureAccessibilitySnapshot } = require('./a
 const { PrivacySafeTrace } = require('./trace');
 
 class BrowserRunRuntime {
-  constructor({ services, uid, runId, workflowId, sessionId, sessionRetentionDays = 30 }) {
-    Object.assign(this, { services, uid, runId, workflowId, sessionId: sessionId || workflowId, sessionRetentionDays });
+  constructor({ services, uid, runId, workflowId, sessionId, sessionRetentionDays = 30, traceBatching = false, distributedBrowserLeases = false }) {
+    Object.assign(this, { services, uid, runId, workflowId, sessionId: sessionId || workflowId, sessionRetentionDays, traceBatching, distributedBrowserLeases });
+    this.lifecycle = distributedBrowserLeases ? services.distributedLifecycle : services.lifecycle;
     this.refs = new AccessibilityReferenceMap();
-    this.trace = new PrivacySafeTrace({ store: services.store, uid, runId });
+    this.trace = new PrivacySafeTrace({ store: services.store, uid, runId, batching: traceBatching });
     this.prepared = false; this.attached = false; this.agent = null;
   }
   async prepare() {
     if (this.prepared) return this.storageState || null;
-    this.services.lifecycle.acquire({ uid: this.uid, runId: this.runId });
+    await this.lifecycle.acquire({ uid: this.uid, runId: this.runId });
     this.storageState = await this.services.store.loadSession(this.uid, this.sessionId);
     this.prepared = true;
     await this.trace.record('runtime_started', { outcome: this.storageState ? 'session_restored' : 'fresh_session' });
@@ -19,7 +20,7 @@ class BrowserRunRuntime {
   async attach(agent) {
     if (this.attached || !agent?.page) return;
     this.agent = agent; this.attached = true; agent._browserRuntime = this; this.trace.attach(agent.page);
-    const lease = this.services.lifecycle.assertAlive(this.runId);
+    const lease = this.distributedBrowserLeases ? await this.lifecycle.assertAlive(this.uid, this.runId) : this.lifecycle.assertAlive(this.runId);
     this.expiryTimer = setTimeout(() => {
       agent.cleanup().catch(() => {});
     }, Math.max(1, lease.expiresAt - Date.now()));
@@ -35,12 +36,14 @@ class BrowserRunRuntime {
   async fillRef(ref, value) { await this.refs.resolve(this.agent?.page, ref).fill(String(value), { timeout: 5000 }); }
   async beforeNode(node) {
     if (!this.agent?.page) return;
-    this.services.lifecycle.assertAlive(this.runId); this.services.lifecycle.heartbeat(this.runId);
-    await this.trace.record('node', { nodeId: node.id, phase: 'before', url: this.agent.page.url(), snapshot: await this.snapshot() });
+    if (this.distributedBrowserLeases) { await this.lifecycle.assertAlive(this.uid, this.runId); await this.lifecycle.heartbeat(this.uid, this.runId); }
+    else { this.lifecycle.assertAlive(this.runId); this.lifecycle.heartbeat(this.runId); }
+    await this.trace.record('node', { nodeId: node.id, phase: 'before', url: this.agent.page.url(), snapshot: this.traceBatching ? null : await this.snapshot() });
   }
   async afterNode(node) {
     if (!this.agent?.page) return;
-    await this.trace.record('node', { nodeId: node.id, phase: 'after', outcome: 'success', url: this.agent.page.url(), snapshot: await this.snapshot() });
+    const snapshot = this.traceBatching && !['trigger', 'navigate', 'open_tab', 'switch_tab'].includes(node.type) ? null : await this.snapshot();
+    await this.trace.record('node', { nodeId: node.id, phase: 'after', outcome: 'success', url: this.agent.page.url(), snapshot });
   }
   async nodeFailed(node, error) {
     if (!this.agent?.page) return;
@@ -52,7 +55,8 @@ class BrowserRunRuntime {
     await this.trace.record('takeover_requested', { outcome: 'waiting', url: agent.page?.url(), snapshot });
     const deadline = Date.now() + this.services.takeover.waitMs;
     while (Date.now() < deadline) {
-      this.services.lifecycle.assertAlive(this.runId); this.services.lifecycle.heartbeat(this.runId);
+      if (this.distributedBrowserLeases) { await this.lifecycle.assertAlive(this.uid, this.runId); await this.lifecycle.heartbeat(this.uid, this.runId); }
+      else { this.lifecycle.assertAlive(this.runId); this.lifecycle.heartbeat(this.runId); }
       const command = await this.services.takeover.nextCommand(this.uid, this.runId);
       if (!command) { await new Promise((resolve) => setTimeout(resolve, this.services.takeover.pollMs)); continue; }
       try {
@@ -84,7 +88,9 @@ class BrowserRunRuntime {
     } finally {
       if (this.expiryTimer) clearTimeout(this.expiryTimer);
       if (agent?._browserRuntime === this) delete agent._browserRuntime;
-      await this.trace.close(); this.refs.clear(); this.services.lifecycle.release(this.runId);
+      await this.trace.close(); this.refs.clear();
+      if (this.distributedBrowserLeases) await this.lifecycle.release(this.uid, this.runId);
+      else this.lifecycle.release(this.runId);
     }
   }
 }

@@ -50,24 +50,24 @@ const DEFAULT_COPY: AdCopyData = {
     subText: "Put AI to work across all your tools with Stanley. Automate smarter, work faster, and focus on strategy."
   },
   ad2: {
-    painTitle: "The Cloud Tax",
-    painSub: "Locked into expensive step-by-step billing.",
+    painTitle: "Prompt-Only Automation",
+    painSub: "Powerful until the model guesses wrong.",
     painPoints: [
-      "Pay-per-step API charges that scale out of control",
-      "No offline run support (mandatory cloud lock-in)",
-      "Strict rate limits and third-party data sharing"
+      "Opaque plans that are hard to inspect",
+      "Unbounded agents that can drift from the task",
+      "One execution mode for every kind of work"
     ],
-    reliefTitle: "Native Execution",
-    reliefSub: "Run unlimited tasks locally, directly on your metal.",
+    reliefTitle: "Constrained Automation",
+    reliefSub: "Use AI inside a workflow you can inspect and control.",
     reliefPoints: [
-      "100% free execution, no matter the step count",
-      "Zero network roundtrips for local web page actions",
-      "Absolute privacy: Credentials never leave your machine"
+      "Mission, parameter, branch, and approval guardrails",
+      "Browser, native API, connector, and bounded Agent nodes",
+      "Scoped credentials resolved only during execution"
     ]
   },
   ad3: {
     hook: "Keep your automation flowing with Stanley",
-    subText: "Orchestrate your browser workflows locally and reliably. No code required."
+    subText: "Orchestrate browser and API workflows with visible steps and reviewable recovery. No code required."
   },
   ad4: {
     hook: "Drowning in browser tasks? Automate them with Stanley.",

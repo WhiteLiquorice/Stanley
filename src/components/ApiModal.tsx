@@ -17,29 +17,11 @@ export function ApiModal({ workflow, onClose }: Props) {
 
   const runnerUrl = (import.meta.env.VITE_RUNNER_URL as string | undefined)?.replace(/\/$/, '') || window.location.origin;
 
-  // Clean the workflow object slightly for copy-paste size
-  const cleanWf = {
-    id: workflow.id,
-    name: workflow.name,
-    nodes: workflow.nodes.map(n => ({
-      id: n.id,
-      type: n.type,
-      label: n.label,
-      data: n.data,
-      position: n.position
-    })),
-    edges: workflow.edges.map(e => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      condition: e.data?.condition
-    }))
-  };
-
-  const payloadString = JSON.stringify({ workflow: cleanWf, secrets: {} }, null, 2);
+  const endpoint = `${runnerUrl}/v1/workflows/${encodeURIComponent(workflow.id)}/invoke`;
+  const payloadString = JSON.stringify({ input: {} }, null, 2);
 
   const snippets = {
-    curl: `curl -X POST "${runnerUrl}/run" \\
+    curl: `curl -X POST "${endpoint}" \\
   -H "Authorization: Bearer YOUR_FIREBASE_ID_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '${payloadString}'`,
@@ -49,7 +31,7 @@ const ID_TOKEN = "YOUR_FIREBASE_ID_TOKEN";
 
 async function triggerStanleyAutomation() {
   try {
-    const response = await fetch(\`\${RUNNER_URL}/run\`, {
+    const response = await fetch(\`\${RUNNER_URL}/v1/workflows/${encodeURIComponent(workflow.id)}/invoke\`, {
       method: 'POST',
       headers: {
         'Authorization': \`Bearer \${ID_TOKEN}\`,
@@ -71,13 +53,13 @@ triggerStanleyAutomation();`,
     python: `import requests
 import json
 
-runner_url = "${runnerUrl}/run"
+runner_url = "${endpoint}"
 headers = {
     "Authorization": "Bearer YOUR_FIREBASE_ID_TOKEN",
     "Content-Type": "application/json"
 }
 
-payload = ${JSON.stringify({ workflow: cleanWf, secrets: {} }, null, 4).replace(/true/g, 'True').replace(/false/g, 'False')}
+payload = {"input": {}}
 
 try:
     response = requests.post(runner_url, headers=headers, data=json.dumps(payload))
@@ -131,7 +113,7 @@ except Exception as e:
           <div className="mb-4 flex items-start gap-2.5 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/15">
             <ExternalLink size={14} className="text-indigo-400 mt-0.5 shrink-0" />
             <p className="text-[11px] text-slate-300 leading-normal">
-              <strong>Auth Note:</strong> Replace <code className="text-violet-400 px-1 bg-slate-900 rounded">YOUR_FIREBASE_ID_TOKEN</code> with a valid Firebase auth token. You can inspect your active token via browser console: <code className="text-violet-400 px-1 bg-slate-900 rounded">localStorage.getItem(\'stanley_id_token\')</code>.
+              <strong>Production endpoint:</strong> Publish a tested production release first, then replace <code className="text-violet-400 px-1 bg-slate-900 rounded">YOUR_FIREBASE_ID_TOKEN</code> with a valid Firebase auth token. This endpoint accepts only declared workflow input—not workflow source or secrets.
             </p>
           </div>
 

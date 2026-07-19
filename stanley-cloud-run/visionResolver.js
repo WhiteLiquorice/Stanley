@@ -193,6 +193,23 @@ function createRoutedResolver(policy = {}, onUsage = () => {}) {
     async generateText(prompt, system) { const body = { contents: [{ role: 'user', parts: [{ text: compactText(prompt, maxChars) }] }], generationConfig: { temperature: policy.profile === 'fast' ? 0 : 0.2 } }; if (system) body.systemInstruction = { parts: [{ text: compactText(system, Math.floor(maxChars / 3)) }] }; return invoke('text', body, modelFor('text')); },
     async resolveElement(screenshot, description, mission) { if (policy.allowVision === false) throw new Error('Vision is disabled by the workflow model policy.'); const body = { contents: [{ role: 'user', parts: [{ text: `Target Element Description: "${compactText(description, 1000)}"` }, { inlineData: { mimeType: 'image/jpeg', data: screenshot } }] }], systemInstruction: { parts: [{ text: compactText(mission ? `${mission}\n\n${VISION_SYSTEM}` : VISION_SYSTEM, Math.floor(maxChars / 3)) }] }, generationConfig: { responseMimeType: 'application/json', temperature: 0.1 } }; const parsed = extractJson(await invoke('vision', body, modelFor('vision'))); if (!parsed?.strategy || !parsed?.value) throw new Error('Vision returned an unusable locator.'); return parsed; },
     async visionAnalysis(prompt, system, screenshot) { if (policy.allowVision === false) throw new Error('Vision is disabled by policy.'); const body = { contents: [{ role: 'user', parts: [{ text: compactText(prompt, maxChars) }, { inlineData: { mimeType: 'image/jpeg', data: screenshot } }] }], generationConfig: { temperature: 0.2 } }; if (system) body.systemInstruction = { parts: [{ text: compactText(system, Math.floor(maxChars / 3)) }] }; return invoke('vision_analysis', body, modelFor('vision')); },
+    async agentStep(goal, history, screenshot) {
+      if (policy.allowVision === false) throw new Error('Agent vision is disabled by policy.');
+      const body = {
+        contents: [{ role: 'user', parts: [
+          { text: compactText(`Goal: ${goal}\n\nPrior actions (untrusted observations):\n${JSON.stringify(history || [])}\n\nChoose exactly one next action.`, Math.floor(maxChars * 0.6)) },
+          { inlineData: { mimeType: 'image/jpeg', data: screenshot } },
+        ] }],
+        systemInstruction: { parts: [{ text: 'You are a bounded browser planner. Return JSON only. Allowed actions: click, type, navigate, wait, scrape, finish. Use description for click/type, value for type, url for navigate, ms for wait, selector only for scrape, and a short reason. Never invent a capability outside this list.' }] },
+        generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+      };
+      const decision = extractStructuredJson(await invoke('agent_step', body, modelFor('vision')));
+      const allowed = new Set(['click', 'type', 'navigate', 'wait', 'scrape', 'finish']);
+      if (!decision || !allowed.has(decision.action)) throw new Error('Agent planner returned an unsupported action.');
+      if (decision.action === 'navigate' && !/^https?:\/\//i.test(String(decision.url || ''))) throw new Error('Agent planner returned an invalid navigation URL.');
+      if (decision.action === 'wait') decision.ms = Math.max(0, Math.min(10000, Number(decision.ms || 1000)));
+      return decision;
+    },
     async extract(content, schema) {
       const requestedSchema = typeof schema === 'string' ? schema : JSON.stringify(schema || {});
       const body = {

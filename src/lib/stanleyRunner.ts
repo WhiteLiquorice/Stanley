@@ -1,7 +1,7 @@
 /**
  * Drop-in replacement for src/lib/stanleyRunner.ts.
- * Keeps the current runHeadless(workflow, secrets) call shape while switching
- * execution to the server-owned workflow-ID contract. Browser secrets are ignored.
+ * Executes a persisted workflow by ID and submits only its declared runtime
+ * inputs. Vault secrets are always resolved by the server.
  */
 import {
   cancelRun,
@@ -18,6 +18,7 @@ export interface HeadlessRunResult {
   runId?: string;
   status?: string;
   paused?: boolean;
+  wait?: { type?: string; nodeId?: string; reason?: string };
 }
 
 export function isHeadlessConfigured(): boolean {
@@ -26,10 +27,10 @@ export function isHeadlessConfigured(): boolean {
 
 export async function runHeadless(
   workflow: { id?: string },
-  _legacyBrowserSecrets: Record<string, string> = {}
+  input: Record<string, unknown> = {}
 ): Promise<HeadlessRunResult> {
   if (!workflow.id) throw new Error('Save the workflow before running it.');
-  return runWorkflowById(workflow.id);
+  return runWorkflowById(workflow.id, input);
 }
 
 export { cancelRun as cancelHeadlessRun, decideRun as decideHeadlessRun };

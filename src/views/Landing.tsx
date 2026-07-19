@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Shield, Zap, Lock, Terminal, Activity, CheckCircle2, AlertCircle, X, ChevronDown } from 'lucide-react';
+import { Shield, Zap, Lock, Workflow, Activity, CheckCircle2, AlertCircle, X, ChevronDown } from 'lucide-react';
 import { signIn, signUp, isLoggedIn } from '../lib/firebaseAuth';
 import './Landing.css';
 
@@ -90,16 +90,16 @@ export function Landing() {
       {/* Hero Section */}
       <section className="hero-section">
         <div className="hero-badge">
-          <Activity size={14} /> Local Enterprise-Grade Automation
+          <Activity size={14} /> AI-guided, deterministic automation
         </div>
         
         <h1 className="hero-title animate-fade-in" style={{ animationDelay: '100ms' }}>
-          Meet Stanley. The <span className="highlight">bulletproof</span> local web automation butler.
+          Tell Stanley the outcome. Get a <span className="highlight">workflow you can inspect</span>.
         </h1>
         
         <p className="hero-subtitle animate-fade-in" style={{ animationDelay: '200ms' }}>
-          Enterprise-grade browser automation that runs entirely on your machine. 
-          Bypass complex anti-bot systems effortlessly using your own residential connection. No proxies required.
+          Build browser and API automations with constrained AI, a visual workflow graph, reusable templates,
+          and deterministic execution. Stanley uses AI where judgment helps and explicit steps everywhere else.
         </p>
         
         <div className="hero-cta animate-fade-in" style={{ animationDelay: '300ms' }}>
@@ -112,7 +112,7 @@ export function Landing() {
         </div>
         
         <p className="hero-note animate-fade-in" style={{ animationDelay: '400ms' }}>
-          <Lock size={14} className="text-accent-green" /> Zero-configuration required. 100% data privacy.
+          <Lock size={14} className="text-accent-green" /> First 10 successful runs are free. No credit card required.
         </p>
       </section>
 
@@ -120,63 +120,63 @@ export function Landing() {
       <section id="features" className="features-section">
         <div className="section-header">
           <h2>Built for Reliable Operations</h2>
-          <p>Stanley integrates directly with Playwright to execute workflows silently and securely from your own device.</p>
+          <p>Use the right execution layer for each job: browser actions, native integrations, generated connectors, or bounded AI agents.</p>
         </div>
 
         <div className="features-grid">
           <div 
-            className={`feature-card glass-panel interactive-card ${expandedFeature === 'ip' ? 'expanded' : ''}`}
-            onClick={() => setExpandedFeature(expandedFeature === 'ip' ? null : 'ip')}
+            className={`feature-card glass-panel interactive-card ${expandedFeature === 'workflow' ? 'expanded' : ''}`}
+            onClick={() => setExpandedFeature(expandedFeature === 'workflow' ? null : 'workflow')}
           >
             <div className="feature-icon blue">
-              <Shield size={24} />
+              <Workflow size={24} />
             </div>
             <div className="feature-title-row">
-              <h3>Residential IP Safety</h3>
-              <ChevronDown size={18} className={`chevron ${expandedFeature === 'ip' ? 'rotated' : ''}`} />
+              <h3>Constrained AI Workflows</h3>
+              <ChevronDown size={18} className={`chevron ${expandedFeature === 'workflow' ? 'rotated' : ''}`} />
             </div>
-            <p>Because Stanley runs locally on your machine, it uses your residential internet connection. Evade cloud detection blocks and IP bans without paying for expensive proxies.</p>
-            <div className={`feature-drawer ${expandedFeature === 'ip' ? 'open' : ''}`}>
+            <p>A Mission defines the outcome while explicit nodes, parameters, branches, and policies constrain how Stanley reaches it.</p>
+            <div className={`feature-drawer ${expandedFeature === 'workflow' ? 'open' : ''}`}>
               <div className="drawer-content">
-                Standard scrapers route traffic through data centers, which modern websites easily detect and flag. By running natively on your hardware, Stanley leverages your actual internet connection. This makes your automation requests indistinguishable from a real person browsing from home, drastically reducing the occurrence of CAPTCHA challenges and permanent IP blocks.
+                The model works inside a typed graph with execution limits, credential scopes, checkpoints, and review gates. You can inspect and edit the plan before it runs.
               </div>
             </div>
           </div>
 
           <div 
-            className={`feature-card glass-panel interactive-card ${expandedFeature === 'proxy' ? 'expanded' : ''}`}
-            onClick={() => setExpandedFeature(expandedFeature === 'proxy' ? null : 'proxy')}
+            className={`feature-card glass-panel interactive-card ${expandedFeature === 'integrations' ? 'expanded' : ''}`}
+            onClick={() => setExpandedFeature(expandedFeature === 'integrations' ? null : 'integrations')}
           >
             <div className="feature-icon teal">
               <Zap size={24} />
             </div>
             <div className="feature-title-row">
-              <h3>Zero Proxy Configuration</h3>
-              <ChevronDown size={18} className={`chevron ${expandedFeature === 'proxy' ? 'rotated' : ''}`} />
+              <h3>Universal Integrations</h3>
+              <ChevronDown size={18} className={`chevron ${expandedFeature === 'integrations' ? 'rotated' : ''}`} />
             </div>
-            <p>Unlike standard server-side scrapers that require endless configuration, Stanley behaves exactly like a normal human visitor out of the box.</p>
-            <div className={`feature-drawer ${expandedFeature === 'proxy' ? 'open' : ''}`}>
+            <p>Use built-in operations when they exist, then generate and approve a connector for APIs Stanley has not seen before.</p>
+            <div className={`feature-drawer ${expandedFeature === 'integrations' ? 'open' : ''}`}>
               <div className="drawer-content">
-                You no longer need to hunt for reliable proxy providers or manage rotating IP pools. Because the automation runs locally in a standard browser environment, the complex and expensive proxy setup usually required for web scraping is completely eliminated. Just launch your workflow and let Stanley do the rest.
+                Connector definitions are versioned and inspected before publication. At run time Stanley executes the approved definition deterministically and resolves scoped credentials on the server.
               </div>
             </div>
           </div>
 
           <div 
-            className={`feature-card glass-panel interactive-card ${expandedFeature === 'daemon' ? 'expanded' : ''}`}
-            onClick={() => setExpandedFeature(expandedFeature === 'daemon' ? null : 'daemon')}
+            className={`feature-card glass-panel interactive-card ${expandedFeature === 'recovery' ? 'expanded' : ''}`}
+            onClick={() => setExpandedFeature(expandedFeature === 'recovery' ? null : 'recovery')}
           >
             <div className="feature-icon blue">
-              <Terminal size={24} />
+              <Shield size={24} />
             </div>
             <div className="feature-title-row">
-              <h3>Secure Local Daemon</h3>
-              <ChevronDown size={18} className={`chevron ${expandedFeature === 'daemon' ? 'rotated' : ''}`} />
+              <h3>Reliable, Reviewable Recovery</h3>
+              <ChevronDown size={18} className={`chevron ${expandedFeature === 'recovery' ? 'rotated' : ''}`} />
             </div>
-            <p>A secure Chrome Extension interfaces directly with your Node.js daemon using native messaging. Fast, responsive, and completely isolated.</p>
-            <div className={`feature-drawer ${expandedFeature === 'daemon' ? 'open' : ''}`}>
+            <p>Retries, checkpoints, selector fallbacks, traces, and exception review help failed runs stop safely and recover deliberately.</p>
+            <div className={`feature-drawer ${expandedFeature === 'recovery' ? 'open' : ''}`}>
               <div className="drawer-content">
-                Instead of transmitting your sensitive automation data and credentials to a cloud server, Stanley utilizes a lightweight desktop daemon. The extension communicates directly with this daemon through an encrypted, local-only channel. This architecture ensures your workflows and proprietary data never leave your machine, guaranteeing total privacy and security.
+                Exact selectors and semantic locators are tried before vision. Learned selector changes become reviewable proposals, and risky or ambiguous work can be routed to the exception workbench instead of silently continuing.
               </div>
             </div>
           </div>
@@ -186,27 +186,27 @@ export function Landing() {
       {/* Local Architecture (How It Works) */}
       <section id="architecture" className="architecture-section relative border-t border-white/5">
         <div className="section-header">
-          <h2>Local Architecture Flow</h2>
-          <p>How Stanley securely automates your web actions directly on your machine without cloud servers.</p>
+          <h2>How Stanley Works</h2>
+          <p>From natural-language intent to a constrained, inspectable, and repeatable automation.</p>
         </div>
 
         <div className="architecture-grid">
           <div className="arch-card glass-panel">
             <div className="arch-step-badge">1</div>
-            <h3>1. Request in Extension</h3>
-            <p>Enter your task inside the sandboxed Chrome Extension popup interface.</p>
+            <h3>1. Define the Mission</h3>
+            <p>Start from a template, describe an outcome to Copilot, or build directly in the visual workflow editor.</p>
           </div>
 
           <div className="arch-card glass-panel">
             <div className="arch-step-badge">2</div>
-            <h3>2. Native Messaging Pipe</h3>
-            <p>The extension passes user intents directly to the local Node.js daemon executable using Chrome's secure stdio messaging host.</p>
+            <h3>2. Inspect the Plan</h3>
+            <p>Review the generated nodes, parameters, branches, integrations, permissions, and execution limits before saving.</p>
           </div>
 
           <div className="arch-card glass-panel">
             <div className="arch-step-badge">3</div>
-            <h3>3. Playwright Automation</h3>
-            <p>The daemon spins up a local Chromium browser window to execute actions quietly using your residential IP, evading cloud detection blocks.</p>
+            <h3>3. Execute and Verify</h3>
+            <p>Stanley's cloud runner executes browser or API steps, records evidence, checkpoints progress, and surfaces exceptions for review.</p>
           </div>
         </div>
       </section>
@@ -214,8 +214,8 @@ export function Landing() {
       {/* Feature Matrix Section */}
       <section id="matrix" className="matrix-section">
         <div className="section-header">
-          <h2>How Stanley Outperforms Server Automation</h2>
-          <p>See why running a local digital butler is safer than deploying scraping servers.</p>
+          <h2>Why Hybrid Automation Matters</h2>
+          <p>Stanley combines explicit workflow control with AI only where flexible judgment adds value.</p>
         </div>
 
         <div className="matrix-container glass-panel">
@@ -223,35 +223,35 @@ export function Landing() {
             <thead>
               <tr>
                 <th>Capability</th>
-                <th className="highlight-col">Project Stanley (Local Daemon)</th>
-                <th>Standard Cloud Scraper (Server)</th>
+                <th className="highlight-col">Stanley</th>
+                <th>Single-mode automation</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>IP Reputation / Block Rate</td>
-                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Excellent (Residential IP)</td>
-                <td className="negative">Poor (Cloud Data Center IPs)</td>
+                <td>Workflow creation</td>
+                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Natural language, templates, and visual editing</td>
+                <td className="negative">Usually manual or prompt-only</td>
               </tr>
               <tr>
-                <td>CAPTCHA / Cloudflare Bypasses</td>
-                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Native solver & manual bypass support</td>
-                <td className="negative">Requires expensive solving APIs</td>
+                <td>Execution strategy</td>
+                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Browser, native API, generated connector, and agent nodes</td>
+                <td className="negative">One execution mode</td>
               </tr>
               <tr>
-                <td>Data Privacy</td>
-                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> 100% private (never leaves machine)</td>
-                <td className="negative">Third-party server routing</td>
+                <td>AI control</td>
+                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Mission, policy, step, and approval constraints</td>
+                <td className="negative">Unconstrained prompts or no AI</td>
               </tr>
               <tr>
-                <td>Interactive Session Support</td>
-                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Live browser interaction on demand</td>
-                <td className="negative">No viewable browser runtime</td>
+                <td>Failure handling</td>
+                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Retries, checkpoints, evidence, and exception review</td>
+                <td className="negative">Basic retry or stop</td>
               </tr>
               <tr>
-                <td>Running Cost</td>
-                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Flat $25 / Month subscription</td>
-                <td className="negative">High monthly API & hosting fees (usually $100+)</td>
+                <td>Extensibility</td>
+                <td className="highlight-col"><CheckCircle2 size={16} className="inline mr-2" /> Versioned connectors and reusable templates</td>
+                <td className="negative">Fixed catalog or one-off scripts</td>
               </tr>
             </tbody>
           </table>
@@ -266,7 +266,7 @@ export function Landing() {
           <div className="relative z-10">
             <h2 className="pricing-title">Get Stanley Today</h2>
             <p className="pricing-subtitle">
-              Unlock the power of browser automation that runs locally on your computer.
+              Build reusable browser and API automations with constrained AI and visible control.
             </p>
 
             <div className="pricing-amount">

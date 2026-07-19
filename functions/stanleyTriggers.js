@@ -30,11 +30,14 @@ function db() { return admin.firestore(); }
 
 async function invokeRunner(payload) {
   if (!RUNNER_URL) throw new Error('RUNNER_URL is not configured for Functions.');
+  if (!payload?.workflowId) throw new Error('workflowId is required for runner invocation.');
   const key = runnerInternalKey.value() || process.env.RUNNER_INTERNAL_KEY || '';
-  const res = await fetch(`${RUNNER_URL}/run-internal`, {
+  const workflowId = encodeURIComponent(payload.workflowId);
+  const { workflowId: _workflowId, ...body } = payload;
+  const res = await fetch(`${RUNNER_URL}/v1/internal/workflows/${workflowId}/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Stanley-Internal-Key': key },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Runner responded ${res.status}`);
   return res.json().catch(() => ({}));
@@ -68,7 +71,7 @@ const stanleyScheduleTick = onSchedule(
       const uid = doc.ref.parent.parent.id; // stanley_users/{uid}/schedules/{id}
       let status = 'Triggered';
       try {
-        await invokeRunner({ uid, workflowId: sched.workflowId, trigger: 'Schedule' });
+        await invokeRunner({ uid, workflowId: sched.workflowId, trigger: 'Schedule', idempotencyKey: `schedule:${doc.id}:${sched.nextRunMs}` });
       } catch (e) {
         status = 'Failed';
         console.error(`[scheduleTick] ${uid}/${sched.workflowId} failed:`, e.message);
@@ -105,12 +108,13 @@ const stanleyWebhook = onRequest(
 
     // Fire-and-forget: browser runs can take 10–60s, longer than callers wait.
     // The run records to the user's history; we ack immediately.
-    invokeRunner({
+    await invokeRunner({
       uid,
       workflowId: trig.workflowId,
       trigger: 'Webhook',
       input: { body: req.body || {}, query: req.query || {} },
-    }).catch((e) => console.error('[webhook] runner invoke failed:', e.message));
+      idempotencyKey: String(req.get('X-Idempotency-Key') || ''),
+    });
 
     res.status(202).json({ accepted: true });
   }

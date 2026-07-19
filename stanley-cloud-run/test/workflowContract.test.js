@@ -30,6 +30,17 @@ assert.throws(() => validateWorkflow(unapprovedSideEffect), /requires an approva
 const arbitraryCode = base();
 arbitraryCode.nodes.push({ id: 'code', type: 'js_code', data: { code: 'return 1' } });
 arbitraryCode.edges.push({ source: 'email', target: 'code' });
-assert.throws(() => validateWorkflow(arbitraryCode), /Custom code node/);
+assert.throws(() => validateWorkflow(arbitraryCode), /unsupported type "js_code"/);
+
+const readIntegration = base();
+readIntegration.nodes = readIntegration.nodes.filter((node) => !['approval', 'send_email'].includes(node.type));
+readIntegration.nodes.push({ id: 'github', type: 'integration', data: { integrationName: 'github_list_repos', params: {} } });
+readIntegration.edges = readIntegration.edges.filter((edge) => edge.kind === 'context');
+readIntegration.edges.push({ source: 'trigger', target: 'github' });
+assert.doesNotThrow(() => validateWorkflow(readIntegration));
+
+const writeIntegration = structuredClone(readIntegration);
+writeIntegration.nodes.find((node) => node.id === 'github').data.integrationName = 'github_create_issue';
+assert.throws(() => validateWorkflow(writeIntegration), /requires an approval node/);
 
 console.log('workflowContract tests passed');

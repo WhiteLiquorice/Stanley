@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "commands": [
+    { "type": "workflow.create", "category": "workflow", "required": ["requestId", "name", "mission", "trigger", "steps"] },
+    { "type": "workflow.rename", "category": "workflow", "required": ["requestId", "workflowId", "baseRevision", "name"] },
+    { "type": "workflow.set_mission", "category": "workflow", "required": ["requestId", "workflowId", "baseRevision", "mission"] },
+    { "type": "workflow.set_trigger", "category": "workflow", "required": ["requestId", "workflowId", "baseRevision", "trigger"] },
+    { "type": "workflow.set_policy", "category": "workflow", "required": ["requestId", "workflowId", "baseRevision", "policy"] },
+    { "type": "step.add", "category": "step", "required": ["requestId", "workflowId", "baseRevision", "step"] },
+    { "type": "step.update", "category": "step", "required": ["requestId", "workflowId", "baseRevision", "stepId", "changes"] },
+    { "type": "step.move", "category": "step", "required": ["requestId", "workflowId", "baseRevision", "stepId", "afterStepId"] },
+    { "type": "step.delete", "category": "step", "required": ["requestId", "workflowId", "baseRevision", "stepId"] },
+    { "type": "workflow.validate", "category": "lifecycle", "required": ["requestId", "workflowId", "revision"] },
+    { "type": "workflow.test", "category": "lifecycle", "required": ["requestId", "workflowId", "revision", "mode"] },
+    { "type": "workflow.publish", "category": "lifecycle", "required": ["requestId", "workflowId", "revision"] },
+    { "type": "run.start", "category": "run", "required": ["requestId", "workflowId", "revision", "inputs"] },
+    { "type": "run.cancel", "category": "run", "required": ["requestId", "runId"] },
+    { "type": "run.resume", "category": "run", "required": ["requestId", "runId", "checkpointId"] },
+    { "type": "run.retry", "category": "run", "required": ["requestId", "runId"] },
+    { "type": "decision.approve", "category": "trust", "required": ["requestId", "decisionId", "decisionVersion"] },
+    { "type": "decision.deny", "category": "trust", "required": ["requestId", "decisionId", "decisionVersion", "reason"] },
+    { "type": "connection.disconnect", "category": "connection", "required": ["requestId", "connectionId"] },
+    { "type": "connector.test", "category": "connector", "required": ["requestId", "connectorId", "version"] },
+    { "type": "connector.publish", "category": "connector", "required": ["requestId", "connectorId", "version"] },
+    { "type": "connector.rollback", "category": "connector", "required": ["requestId", "connectorId", "version"] },
+    { "type": "skill.activate", "category": "skill", "required": ["requestId", "skillId", "version"] },
+    { "type": "skill.pause", "category": "skill", "required": ["requestId", "skillId"] },
+    { "type": "skill.rollback", "category": "skill", "required": ["requestId", "skillId", "version"] }
+  ]
+}

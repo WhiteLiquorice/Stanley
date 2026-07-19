@@ -1,0 +1,98 @@
+[
+  {
+    "id": "workflow-authoring",
+    "claim": "Users can create and inspect workflows through natural language, templates, and a visual graph.",
+    "evidence": ["src/views/Cockpit.tsx", "src/views/Templates.tsx", "stanley-cloud-run/src/workflowContract.js"],
+    "tests": ["scripts/auditBuiltInTemplates.mjs", "stanley-cloud-run/test/workflowContract.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Confirm authenticated create, save, reload, edit, and delete against production Firebase."
+  },
+  {
+    "id": "mission-constraints",
+    "claim": "Every normalized workflow has exactly one Mission connected to its Trigger.",
+    "evidence": ["src/views/Cockpit.tsx", "stanley-cloud-run/src/workflowContract.js"],
+    "tests": ["stanley-cloud-run/test/workflowContract.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Run one legacy workflow migration against a production copy."
+  },
+  {
+    "id": "hybrid-execution",
+    "claim": "Stanley can combine deterministic browser steps, native API operations, generated connectors, and bounded Agent nodes.",
+    "evidence": ["stanley-cloud-run/branchingEngine.js", "stanley-cloud-run/src/native-integration-engine/runtime.js", "stanley-cloud-run/src/connector-engine/src/integrationRuntime.js"],
+    "tests": ["stanley-cloud-run/test/nativeIntegrations.test.js", "stanley-cloud-run/src/connector-engine/test/integrationRuntime.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Run credentialed smoke tests for one browser flow, one native operation, one generated connector, and one Agent flow."
+  },
+  {
+    "id": "selector-recovery",
+    "claim": "Browser interactions escalate from exact selectors to semantic matching and optional vision, with reviewable selector learning.",
+    "evidence": ["stanley-cloud-run/branchingEngine.js", "stanley-cloud-run/src/reliability/selectorLearning.js", "stanley-cloud-run/visionResolver.js"],
+    "tests": ["stanley-cloud-run/test/reliabilityFoundation.test.js", "stanley-cloud-run/test/browserRuntime.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Exercise all three locator tiers in the deployed browser runtime with Gemini configured."
+  },
+  {
+    "id": "safe-lifecycle",
+    "claim": "Runs support admission checks, retries, checkpoints, cancellation, resumable state, evidence, and exception review.",
+    "evidence": ["stanley-cloud-run/src/runLifecycle.js", "stanley-cloud-run/src/reliability/admission.js", "stanley-cloud-run/src/trust-engine/resume.js"],
+    "tests": ["stanley-cloud-run/test/runLifecycle.test.js", "stanley-cloud-run/test/reliabilityFoundation.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Force a mid-run failure, cancellation, and resume against deployed storage and queues."
+  },
+  {
+    "id": "credential-safety",
+    "claim": "Credentials are scoped and resolved at execution time instead of being embedded in generated connector source or model prompts.",
+    "evidence": ["stanley-cloud-run/secretsResolver.js", "stanley-cloud-run/src/reliability/secretScope.js"],
+    "tests": ["stanley-cloud-run/test/reliabilityFoundation.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Verify production IAM, encryption keys, secret access, redaction, and tenant isolation."
+  },
+  {
+    "id": "templates",
+    "claim": "Stanley ships reusable, structurally valid templates with Mission context.",
+    "evidence": ["src/views/Templates.tsx"],
+    "tests": ["scripts/auditBuiltInTemplates.mjs"],
+    "localStatus": "verified",
+    "deploymentGate": "Create and run at least one browser and one API template in production."
+  },
+  {
+    "id": "operations-surfaces",
+    "claim": "Connector, trust, monitoring, artifact, and workflow operations have web routes and user-facing workbenches.",
+    "evidence": ["stanley-cloud-run/src/server.js", "GPT-Additions/connector-workbench/ConnectorWorkbench.tsx", "GPT-Additions/exception-workbench/ExceptionWorkbench.tsx", "GPT-Additions/operations-workbench/OperationsWorkbench.tsx"],
+    "tests": ["stanley-cloud-run/test/workflowPlatform.test.js", "stanley-cloud-run/test/artifactEngine.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Confirm every Operations navigation route returns JSON through the deployed frontend-to-backend configuration."
+  },
+  {
+    "id": "free-runs",
+    "claim": "New users receive ten successful runs before a subscription is required.",
+    "evidence": ["stanley-cloud-run/src/runEntitlements.js", "src/lib/usageLimit.ts", "src/views/Landing.tsx"],
+    "tests": ["stanley-cloud-run/test/runEntitlements.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Use a fresh production account to verify failed runs do not consume quota and the eleventh successful run is gated."
+  },
+  {
+    "id": "conversation-command-planning",
+    "claim": "Stanley can convert conversational requests into clarification questions or validated, revision-aware workflow commands without directly persisting or executing model output.",
+    "evidence": ["shared/workflow-command-contract.json", "stanley-cloud-run/src/conversation-engine/service.js", "src/components/ConversationPlanCard.tsx"],
+    "tests": ["stanley-cloud-run/test/conversationEngine.test.js", "stanley-cloud-run/test/workflowCommands.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Deploy the planner endpoint, enable VITE_CONVERSATION_PLANNER_ENABLED, and run credentialed create, clarify, edit, explain, repair, and approval-diff canaries."
+  },
+  {
+    "id": "reviewed-conversation-application",
+    "claim": "Stanley can persist the exact workflow changes a user reviewed through an Admin-only proposal ledger, fingerprint-bound approval, command revalidation, transactional revision checks, idempotent replay, prior-version archival, and resulting-graph validation without executing the workflow.",
+    "evidence": ["stanley-cloud-run/src/conversation-engine/application.js", "stanley-cloud-run/src/conversation-engine/proposalStore.js", "src/components/ConversationPlanCard.tsx"],
+    "tests": ["stanley-cloud-run/test/conversationEngine.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Deploy both conversation endpoints, approve a new workflow and an edit, then verify duplicate approval is idempotent and a stale revision is rejected against production Firestore."
+  },
+  {
+    "id": "advertised-dynamic-research",
+    "claim": "The production V2 Maps and Pinterest ads map to executable, count-matched templates that load dynamic feeds, capture links deterministically, enrich detail pages, and fail closed when the promised output contract is not met.",
+    "evidence": ["certification/advertised-use-cases.json", "src/views/Templates.tsx", "stanley-cloud-run/src/use-case-engine/dynamicCollection.js", "stanley-cloud-run/branchingEngine.js"],
+    "tests": ["scripts/auditAdvertisedUseCases.mjs", "stanley-cloud-run/test/dynamicCollection.test.js"],
+    "localStatus": "verified",
+    "deploymentGate": "Create both templates in production and run certification/advertised-canaries.example.json against live Google Maps and Pinterest sessions; publish exact-count ads only after both canaries pass."
+  }
+]

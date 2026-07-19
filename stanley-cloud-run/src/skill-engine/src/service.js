@@ -19,12 +19,22 @@ class SkillService {
   }
   async approve(tenantId, skillId, version, approvedBy) { const skill = await this.requireVersion(tenantId, skillId, version); if (skill.state !== 'tested' || skill.testResults.some((item) => !item.passed)) throw new Error('Skill regressions must pass before approval.'); if (!approvedBy?.uid || approvedBy.type === 'model') throw new Error('Skill approval requires a human identity.'); const now = this.clock(); return this.store.saveDraft({ ...skill, state: 'approved', approvalHistory: [...skill.approvalHistory, { action: 'approved', approvedBy, approvedAt: now, fingerprint: skill.fingerprint }], updatedAt: now }); }
   async activate(tenantId, skillId, version) { const skill = await this.requireVersion(tenantId, skillId, version); if (skill.state !== 'approved') throw new Error('Only approved skill versions may activate.'); return this.store.activate({ ...skill, activatedAt: this.clock() }); }
-  async select(context) { const skills = this.store.listActive ? await this.store.listActive(context.tenantId, { workflowId: context.workflowId }) : await this.store.list(context.tenantId, { workflowId: context.workflowId, state: 'active' }); return selectSkill(skills, context); }
+  async select(context) {
+    if (context.skillId) {
+      let preferred = context.skillVersion ? await this.store.get(context.tenantId, context.skillId, context.skillVersion) : null;
+      if (!preferred && this.store.listActive) preferred = (await this.store.listActive(context.tenantId, {})).find((item) => item.skillId === context.skillId) || null;
+      if (!preferred || preferred.state !== 'active') return { selected: null, explanation: { reason: 'The workflow preferred a skill that is no longer active.', selectedSkillId: context.skillId } };
+      const selection = selectSkill([{ ...preferred, workflowId: context.workflowId, match: { ...(preferred.match || {}), allowCrossWorkflow: true } }], { ...context, operationName: preferred.operationName }, { minimumScore: 0, allowDeterministicTieBreak: true });
+      if (selection.selected) selection.selected = preferred;
+      return selection;
+    }
+    const skills = this.store.listActive ? await this.store.listActive(context.tenantId, { workflowId: context.workflowId }) : await this.store.list(context.tenantId, { workflowId: context.workflowId, state: 'active' }); return selectSkill(skills, context);
+  }
   async selectAndExecute(context) {
     const selection = await this.select(context); if (!selection.selected) return { executed: false, safeToFallback: true, selection: selection.explanation };
     const skill = selection.selected; const occurredAt = this.clock();
     try {
-      const execution = await executeSkill(skill, { input: context.input || {}, secrets: context.secrets || {}, runner: this.runner, mode: context.mode, trustStore: this.trustStore, tenantId: context.tenantId, runId: context.runId, orchestration: context.orchestration || null });
+      const execution = await executeSkill(skill, { input: context.input || {}, secrets: context.secrets || {}, runner: this.runner, mode: context.mode, trustStore: this.trustStore, tenantId: context.tenantId, runId: context.runId, orchestration: context.orchestration || null, runnerOptions: context.runnerOptions || {} });
       await this.store.recordExecution(skill.tenantId, skill.skillId, skill.version, { success: true, durationMs: execution.durationMs, executionCostMicros: 0, modelCallsSaved: execution.modelCallsSaved, occurredAt });
       return { executed: true, skillId: skill.skillId, version: skill.version, selection: selection.explanation, ...execution };
     } catch (error) {

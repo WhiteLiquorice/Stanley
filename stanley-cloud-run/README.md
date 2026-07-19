@@ -76,6 +76,21 @@ The promoted revision needs `STANLEY_PROJECT_ID`, the existing
 current runner. Set the resulting service URL as `VITE_RUNNER_URL` during the
 frontend build.
 
+Production execution must use Cloud Tasks rather than inline request execution.
+Create a queue and configure `CLOUD_TASKS_QUEUE`, `CLOUD_TASKS_LOCATION`, and
+`RUNNER_SERVICE_URL` on the runner. Grant the runner service account permission
+to enqueue tasks, keep `RUNNER_INTERNAL_KEY` identical on task submissions, and
+confirm `/health` reports `dispatchMode: "cloud-tasks"`. Inline mode is only a
+development/private-test fallback. Leave `ALLOW_LEGACY_RUN` unset or `false`;
+the frontend and generated API examples use versioned `/v1` endpoints.
+
+Google Workspace connections require `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET` from Secret Manager, plus
+`GOOGLE_OAUTH_REDIRECT_URI=https://<runner>/v1/oauth/google/callback` and
+`STANLEY_APP_URL=https://<frontend>`. Register that exact callback in Google
+Cloud. Refresh and access tokens are stored only in server-only Firestore
+collections and are injected into declared Google operations at execution time.
+
 Also configure `ARTIFACT_BUCKET`. Store `BROWSER_SESSION_ENCRYPTION_KEY` as a
 32-byte Secret Manager value rather than in `env.yaml`; encrypted browser
 session persistence and takeover snapshots fail closed without it. Model
@@ -87,10 +102,15 @@ automatic retention cleanup.
 This can remain scale-to-zero before customers. The service URL stays available;
 Cloud Run may cold-start the first request, but no always-on instance is required.
 
-Approvals are preflight gates: the run is persisted as `pending_approval` before
-browser work begins. Approval launches the full validated graph with approval
-nodes converted to deterministic no-ops; rejection cancels it. This avoids
-replaying side effects or pretending an in-memory browser can survive a pause.
+With the v2 reliability profile, approvals pause at their authored node and
+resume from the durable orchestration checkpoint. The compatibility rollback
+profile retains the older preflight gate. In both profiles, rejection cancels
+the run without performing the guarded side effect.
+
+Free accounts are valid runner accounts. A server transaction reserves a free
+slot when a run is created and counts it only after successful completion; paid
+accounts bypass the ten-successful-run limit. Browser-side counters are display
+only and cannot mutate entitlement state.
 
 ## Deliberate transition boundary
 

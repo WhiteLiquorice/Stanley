@@ -20,6 +20,10 @@ interface EmailTrigger { id: string; workflowId: string; query: string; checkInt
 interface MonitorTrigger { id: string; workflowId: string; url: string; selector?: string; checkIntervalMin: number; enabled: boolean; lastCheckMs?: number; lastStatus?: string; }
 
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+// Standalone Gmail/page polling records do not have a production scheduler.
+// Their reliable equivalent is a scheduled workflow containing Gmail or
+// Monitor nodes, so the inert shortcut controls stay hidden.
+const DIRECT_POLLING_TRIGGER_UI = false;
 
 function randomHex(bytes: number): string {
   const a = new Uint8Array(bytes);
@@ -203,7 +207,7 @@ export function TriggersPanel({ workflow, onClose }: Props) {
         <div style={{ fontSize: '0.68rem', color: 'var(--text-tertiary)', marginBottom: '0.5rem' }}>Times are in your timezone ({TZ}).</div>
         
         {/* Failure Alerts Form Options */}
-        <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '10px 12px', marginBottom: '1.25rem', marginTop: '0.5rem' }}>
+        {DIRECT_POLLING_TRIGGER_UI && <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '10px 12px', marginBottom: '1.25rem', marginTop: '0.5rem' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', userSelect: 'none', color: '#f1f5f9' }}>
             <input 
               type="checkbox" 
@@ -239,7 +243,7 @@ export function TriggersPanel({ workflow, onClose }: Props) {
               </div>
             </div>
           )}
-        </div>
+        </div>}
 
         {schedules.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: '0.8rem', paddingBottom: '0.5rem' }}>No active schedules.</div>
@@ -290,6 +294,11 @@ export function TriggersPanel({ workflow, onClose }: Props) {
           </div>
         ))}
 
+        <div style={{ marginTop: '1.5rem', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '12px', color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>
+          For Gmail polling or page-change monitoring, add the Gmail/Monitor actions to the workflow and schedule the workflow above. This uses Stanley's durable scheduler instead of maintaining a second trigger system.
+        </div>
+
+        {DIRECT_POLLING_TRIGGER_UI && <>
         {/* Gmail Triggers */}
         <h3 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.95rem', marginTop: '1.5rem', color: 'var(--accent-blue)' }}><Mail size={16} /> Active Gmail / Email Triggers</h3>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '0.5rem' }}>
@@ -358,6 +367,7 @@ export function TriggersPanel({ workflow, onClose }: Props) {
             </div>
           </div>
         ))}
+        </>}
       </div>
     </div>
   );

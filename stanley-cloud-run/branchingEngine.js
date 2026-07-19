@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const { executePythonScript } = require('./pythonExecutor.js');
 const { generatePythonApi } = require('./apiResolver.js');
 const { callMcpTool } = require('./src/mcp-engine/client.js');
+const { executeNativeIntegration, getOperation: getNativeOperation } = require('./src/native-integration-engine');
+const { safeFetch } = require('./src/reliability');
+const { assertList, enrichList, extractDomList, scrollUntil } = require('./src/use-case-engine/dynamicCollection');
 
 const MAX_STEPS_DEFAULT = 500;
 
@@ -74,6 +77,32 @@ function buildLabelMap(actions) {
   return map;
 }
 
+function nodeEffectKind(node) {
+  const method = String(node.data?.method || 'GET').toUpperCase();
+  if (node.type === 'integration') return getNativeOperation(node.data?.integrationName || node.data?.integrationType)?.readWrite || 'write';
+  if (node.type === 'http_request') return ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'read' : 'write';
+  if (['send_slack', 'send_email', 'upload_file'].includes(node.type)) return 'write';
+  if (node.type === 'mcp_tool') return node.data?.readOnly === true ? 'read' : 'write';
+  return node.data?.sideEffect === true ? 'write' : 'read';
+}
+
+async function ensureEffectClaim(node, ctx, opts) {
+  if (!opts?.effectLedgerEnabled || nodeEffectKind(node) !== 'write') return;
+  if (!opts.orchestration || typeof opts.orchestration.claimEffect !== 'function') {
+    throw Object.assign(new Error('Durable effect protection is unavailable for this write node.'), { code: 'EFFECT_LEDGER_UNAVAILABLE' });
+  }
+  const effectKey = String(node.data?.idempotencyKey || `${opts.runId}:${node.id}:${ctx.loopIndex ?? 'single'}`);
+  ctx.claimedEffects ||= new Set();
+  if (ctx.claimedEffects.has(effectKey)) return;
+  const claimed = await opts.orchestration.claimEffect(node, effectKey);
+  if (!claimed) {
+    throw Object.assign(new Error('This external effect was already claimed and its outcome requires verification before retrying.'), {
+      code: 'EFFECT_UNKNOWN', nodeId: node.id, nodeType: node.type,
+    });
+  }
+  ctx.claimedEffects.add(effectKey);
+}
+
 async function executeGraph(agent, workflow, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const secrets = opts.secrets || {};
@@ -112,9 +141,13 @@ async function executeGraph(agent, workflow, opts = {}) {
   let steps = 0;
 
   while (current) {
+    if (opts.deadlineAtMs && Date.now() > opts.deadlineAtMs) {
+      throw Object.assign(new Error('Workflow exceeded its execution deadline.'), { code: 'RUN_DEADLINE_EXCEEDED' });
+    }
     if (++steps > maxSteps) {
       throw new Error(`Exceeded max steps (${maxSteps}). The workflow may contain an infinite loop.`);
     }
+    if (typeof opts.onLeaseHeartbeat === 'function') await opts.onLeaseHeartbeat();
     const label = `[Step ${steps}] (${current.label || current.type})`;
     ctx.lastError = null;
 
@@ -127,6 +160,24 @@ async function executeGraph(agent, workflow, opts = {}) {
       ? { ...current, data: { ...(current.data || {}), ...params } }
       : current;
 
+    if (opts.skipCompletedNodes && opts.orchestration && typeof opts.orchestration.restoreNode === 'function') {
+      const restored = await opts.orchestration.restoreNode(effectiveNode);
+      if (restored.completed) {
+        scraped[effectiveNode.id] = restored.output;
+        ctx.lastScrape = typeof restored.output === 'string' ? restored.output : JSON.stringify(restored.output ?? '');
+        onLog(`${label} Restored from durable checkpoint; external work was not repeated.`);
+        const outgoing = (workflow.edges || []).filter(e => e.source === current.id && e.kind !== 'context');
+        const next = await pickNextEdge(outgoing, ctx, scraped);
+        if (!next) break;
+        current = nodesById[next.target];
+        if (!current) {
+          onLog(`[Branch] Dangling edge to unknown target "${next.target}". Stopping.`);
+          break;
+        }
+        continue;
+      }
+    }
+
     if (opts.orchestration && typeof opts.orchestration.beforeNode === 'function') {
       await opts.orchestration.beforeNode(effectiveNode, ctx);
     }
@@ -137,6 +188,8 @@ async function executeGraph(agent, workflow, opts = {}) {
     if (opts.browserRuntime && typeof opts.browserRuntime.beforeNode === 'function') {
       await opts.browserRuntime.beforeNode(effectiveNode, ctx);
     }
+
+    await ensureEffectClaim(effectiveNode, ctx, opts);
 
     const goal = effectiveNode.data?.description || ctx.missionPrompt || `Locate and perform action on the page.`;
     const url = agent.page ? agent.page.url() : '';
@@ -154,7 +207,7 @@ async function executeGraph(agent, workflow, opts = {}) {
     let usedCachedApi = false;
 
     // Connector Engine: approved tenant artifacts run before browser execution.
-    if (opts.connectorRuntime && url && url !== 'about:blank' && effectiveNode.type !== 'navigate' && effectiveNode.type !== 'trigger') {
+    if (opts.connectorRuntime && (effectiveNode.type === 'connector' || (url && url !== 'about:blank' && effectiveNode.type !== 'navigate' && effectiveNode.type !== 'trigger'))) {
       const connector = await opts.connectorRuntime.executeForNode({
         uid: opts.uid, runId: opts.runId, workflowId: workflow.id, node: effectiveNode,
         goal, url, input: { ...ctx.variables, ...ctx.stepParams },
@@ -166,13 +219,15 @@ async function executeGraph(agent, workflow, opts = {}) {
         usedCachedApi = true;
         ctx.lastError = null;
         onLog(`${label} Executed approved connector ${connector.connectorId}@${connector.version}.`);
+      } else if (effectiveNode.type === 'connector') {
+        throw Object.assign(new Error(`Published connector ${effectiveNode.data?.connectorId || ''} is unavailable for this workflow.`), { code: 'CONNECTOR_UNAVAILABLE', nodeId: effectiveNode.id, nodeType: effectiveNode.type });
       }
     }
 
     if (!usedCachedApi) {
       try {
-        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent', 'scroll', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown', 'hover', 'drag_drop', 'upload_file', 'download_file'];
-        if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type)) {
+        const browserNodes = ['trigger', 'navigate', 'click', 'type', 'wait', 'scrape', 'open_tab', 'switch_tab', 'close_tab', 'extract', 'extract_list', 'paginate', 'agent', 'scroll', 'scroll_until', 'dom_extract_list', 'visit_each', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown', 'hover', 'drag_drop', 'upload_file', 'download_file', 'monitor'];
+        if (opts.ensureBrowser && browserNodes.includes(effectiveNode.type) && (effectiveNode.type !== 'trigger' || Boolean(effectiveNode.data?.url))) {
           await opts.ensureBrowser();
         }
 
@@ -250,7 +305,7 @@ async function executeGraph(agent, workflow, opts = {}) {
               
               if (healedSelector && opts.onSelfHealed) {
                 onLog(`[Recovery] Healing successful! Auto-crystallizing selector: "${healedSelector}"`);
-                opts.onSelfHealed(effectiveNode.id, healedSelector);
+                await opts.onSelfHealed(effectiveNode.id, healedSelector);
               }
               // Recovery succeeded! Clear the error.
               ctx.lastError = null;
@@ -305,6 +360,7 @@ async function executeGraph(agent, workflow, opts = {}) {
 }
 
 async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, visionResolver, artifactService, uid, runId, workflow, nodesById, runtimeOptions }) {
+  await ensureEffectClaim(node, ctx, runtimeOptions);
   const data = interpolateFields(node.data || {}, ctx, scraped);
 
   switch (node.type) {
@@ -327,7 +383,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       onLog(`${label} Clicking ${data.selector || data.description}`);
       const healed = await smartClick(agent, data, onLog, visionResolver);
       if (healed && ctx.onSelfHealed) {
-        ctx.onSelfHealed(node.id, healed);
+        await ctx.onSelfHealed(node.id, healed);
       }
       await maybeVerify(agent, data, ctx, onLog, label);
       break;
@@ -343,7 +399,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       onLog(`${label} Typing into ${data.selector || data.description}`);
       const healed = await smartType(agent, data, value, onLog, visionResolver);
       if (healed && ctx.onSelfHealed) {
-        ctx.onSelfHealed(node.id, healed);
+        await ctx.onSelfHealed(node.id, healed);
       }
       await maybeVerify(agent, data, ctx, onLog, label);
       break;
@@ -410,6 +466,52 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       else await agent.page.evaluate((pixels) => window.scrollBy({ top: pixels, behavior: 'instant' }), amount);
       onLog(`${label} Scrolled ${data.selector || `${amount}px`}.`); break;
     }
+    case 'scroll_until': {
+      const result = await scrollUntil({
+        page: agent.page,
+        containerSelector: data.containerSelector,
+        itemSelector: data.itemSelector,
+        uniqueByAttribute: data.uniqueByAttribute,
+        targetCount: data.targetCount,
+        maxScrolls: data.maxScrolls,
+        scrollAmount: data.scrollAmount,
+        settleMs: data.settleMs,
+        stagnationLimit: data.stagnationLimit,
+      });
+      scraped[node.id] = result;
+      ctx.lastScrape = JSON.stringify(result);
+      onLog(`${label} Dynamic feed exposed ${result.count}/${result.targetCount} items after ${result.scrolls} scrolls.`);
+      break;
+    }
+    case 'dom_extract_list': {
+      const records = await extractDomList({
+        page: agent.page,
+        itemSelector: data.itemSelector,
+        fields: parseObject(data.fields, 'DOM extraction fields'),
+        maxItems: data.maxItems,
+        dedupeBy: data.dedupeBy,
+      });
+      scraped[node.id] = records;
+      ctx.lastScrape = JSON.stringify(records);
+      onLog(`${label} Deterministically extracted ${records.length} DOM records.`);
+      break;
+    }
+    case 'visit_each': {
+      const source = scraped[data.sourceNodeId];
+      const records = await enrichList({
+        agent,
+        records: source,
+        urlField: String(data.urlField || 'url'),
+        fields: parseObject(data.fields, 'detail extraction fields'),
+        maxItems: data.maxItems,
+        settleMs: data.settleMs,
+        onProgress: ({ index, total, error }) => onLog(error ? `${label} Skipped detail page ${index}/${total}: ${error.message}` : `${label} Enriched ${index}/${total} detail pages.`),
+      });
+      scraped[node.id] = records;
+      ctx.lastScrape = JSON.stringify(records);
+      onLog(`${label} Detail enrichment completed with ${records.length} records.`);
+      break;
+    }
     case 'find_text': {
       const text = String(data.text || data.description || ''); if (!text) throw new Error('Find text node requires text.');
       const locator = agent.page.getByText(text, { exact: false }).first(); await locator.scrollIntoViewIfNeeded();
@@ -464,42 +566,25 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       onLog(`${label} Evaluating router branches...`);
       break;
 
+    case 'native_integration':
     case 'integration': {
-      const integrationType = data.integrationType;
-      onLog(`${label} Executing native integration: ${integrationType}`);
-      
-      let res;
-      if (integrationType === 'google_sheets_append') {
-        const sheetId = data.sheet_id;
-        const token = data.token || secrets[data.vault_key] || '';
-        const rowData = data.data || {};
-        
-        const fetchRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/A1:append?valueInputOption=USER_ENTERED`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ values: [Object.values(rowData)] })
-        });
-        res = await fetchRes.json();
-      } else if (integrationType === 'notion_create_page') {
-        const dbId = data.database_id;
-        const token = data.token || secrets[data.vault_key] || '';
-        const pageData = data.data || {};
-        
-        const fetchRes = await fetch(`https://api.notion.com/v1/pages`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            parent: { database_id: dbId },
-            properties: pageData
-          })
-        });
-        res = await fetchRes.json();
-      } else {
-        throw new Error(`Unsupported integration type: ${integrationType}`);
+      const integrationName = data.integrationName || data.integrationType;
+      if (!integrationName) throw new Error('Integration node missing integrationName.');
+      let integrationInput = data.params || data.input || {};
+      if (typeof integrationInput === 'string') {
+        try { integrationInput = JSON.parse(integrationInput); }
+        catch { throw new Error('Integration params must be valid JSON.'); }
       }
-      
-      scraped[node.id] = res;
-      ctx.lastScrape = JSON.stringify(res);
+      if (data.query && !integrationInput.query) integrationInput = { ...integrationInput, query: { q: data.query } };
+      onLog(`${label} Executing native integration: ${integrationName}`);
+      const execution = await executeNativeIntegration(integrationName, integrationInput, secrets, {
+        idempotencyKey: `${runId || 'run'}:${node.id}`,
+        artifactService, uid, runId,
+        providerResilience: runtimeOptions.providerResilience,
+      });
+      scraped[node.id] = execution.output;
+      ctx.lastScrape = typeof execution.output === 'string' ? execution.output : JSON.stringify(execution.output);
+      onLog(`${label} Native integration completed with status ${execution.status}.`);
       break;
     }
 
@@ -565,6 +650,35 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
           throw new Error('Extraction LLM resolver not configured for this run.');
         }
       }
+      break;
+    }
+
+    case 'filter_list': {
+      if (!visionResolver || typeof visionResolver.extract !== 'function') throw new Error('AI list filtering requires an extraction resolver.');
+      const source = scraped[data.sourceNodeId];
+      if (!Array.isArray(source)) throw new Error('AI list filtering source must be an array.');
+      const criteria = String(data.criteria || 'Keep records that are complete and relevant.');
+      const schema = data.schema || [{ title: 'string', url: 'string' }];
+      const selected = await visionResolver.extract(`Selection criteria:\n${criteria}\n\nCandidate records:\n${JSON.stringify(source)}`, schema);
+      if (!Array.isArray(selected)) throw new Error('AI list filtering did not return an array.');
+      scraped[node.id] = selected;
+      ctx.lastScrape = JSON.stringify(selected);
+      onLog(`${label} AI selected ${selected.length}/${source.length} records.`);
+      break;
+    }
+
+    case 'assertion': {
+      const source = scraped[data.sourceNodeId];
+      const result = assertList(source, {
+        minItems: data.minItems,
+        requiredFields: Array.isArray(data.requiredFields) ? data.requiredFields : String(data.requiredFields || '').split(',').map((field) => field.trim()).filter(Boolean),
+        uniqueBy: data.uniqueBy,
+        dropIncomplete: data.dropIncomplete === true || data.dropIncomplete === 'true',
+        outputLimit: data.outputLimit,
+      });
+      scraped[node.id] = result;
+      ctx.lastScrape = JSON.stringify(result);
+      onLog(`${label} Verified ${result.length} records against the declared use-case contract.`);
       break;
     }
 
@@ -717,43 +831,6 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       break;
     }
 
-    case 'integration': {
-      const integrationName = data.integrationName;
-      if (!integrationName) throw new Error('Integration node missing integrationName');
-      
-      onLog(`${label} Invoking native API integration: ${integrationName}…`);
-      
-      const params = { ...data };
-      delete params.integrationName;
-      delete params.label;
-      
-      const integrationSecrets = {};
-      for (const [k, v] of Object.entries(secrets)) {
-        integrationSecrets[k] = v;
-      }
-      
-      if (typeof agent.runIntegration === 'function') {
-        const result = await agent.runIntegration(integrationName, params, integrationSecrets);
-        if (result && result.success) {
-          scraped[node.id] = result.data;
-          ctx.lastScrape = typeof result.data === 'object' ? JSON.stringify(result.data) : String(result.data);
-          onLog(`${label} Integration execution succeeded.`);
-        } else {
-          throw new Error(result?.error || 'Integration execution failed');
-        }
-      } else {
-        if (visionResolver && typeof visionResolver.integration === 'function') {
-          const result = await visionResolver.integration(integrationName, params, integrationSecrets);
-          scraped[node.id] = result.data;
-          ctx.lastScrape = typeof result.data === 'object' ? JSON.stringify(result.data) : String(result.data);
-          onLog(`${label} Integration execution succeeded.`);
-        } else {
-          throw new Error('Integration resolver not configured for this run.');
-        }
-      }
-      break;
-    }
-
     case 'http_request': {
       const method = (data.method || 'GET').toUpperCase();
       let url = data.url;
@@ -773,7 +850,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
         if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/json';
       }
       onLog(`${label} HTTP ${method} ${url}`);
-      const httpRes = await fetch(url, { method, headers, body });
+      const httpRes = await safeFetch(url, { method, headers, body }, { enabled: runtimeOptions.safeEgress });
       const contentType = httpRes.headers.get('content-type') || '';
       const httpResult = contentType.includes('json') ? await httpRes.json() : await httpRes.text();
       scraped[node.id] = httpResult;
@@ -853,8 +930,9 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       if (!webhookUrl) throw new Error('send_slack node missing webhookUrl');
       const message = data.message || ctx.lastScrape || 'Stanley notification';
       onLog(`${label} Sending Slack message…`);
-      const slackRes = await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }) });
+      const slackRes = await safeFetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: message }) }, { enabled: runtimeOptions.safeEgress });
       scraped[node.id] = { status: slackRes.status, ok: slackRes.ok };
+      if (!slackRes.ok) throw new Error(`Slack webhook failed (${slackRes.status}).`);
       onLog(`${label} Slack ${slackRes.ok ? 'sent' : 'failed (' + slackRes.status + ')'}`);
       break;
     }
@@ -864,13 +942,18 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       const subject = data.subject || 'Stanley Notification';
       const emailBody = data.body || ctx.lastScrape || '';
       if (!to) throw new Error('send_email node missing "to" address');
-      const emailEndpoint = data.functionUrl || 'https://us-central1-bridgeway-db29e.cloudfunctions.net/stanleySendEmail';
+      const apiKey = secrets.SendGridApiKey || secrets.sendgrid_api_key;
+      const from = data.from || secrets.SendGridFromEmail || secrets.sendgrid_from_email;
+      if (!apiKey || !from) throw new Error('Email delivery requires SendGridApiKey and SendGridFromEmail in the Vault.');
       onLog(`${label} Sending email to ${to}…`);
-      try {
-        const emailRes = await fetch(emailEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to, subject, body: emailBody }) });
-        scraped[node.id] = await emailRes.json().catch(() => ({ status: emailRes.status }));
-        onLog(`${label} Email ${emailRes.ok ? 'sent' : 'failed (' + emailRes.status + ')'}`);
-      } catch (err) { onLog(`${label} Email error: ${err.message}`); scraped[node.id] = { error: err.message }; }
+      const emailRes = await safeFetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personalizations: [{ to: [{ email: to }] }], from: { email: from }, subject, content: [{ type: 'text/plain', value: String(emailBody) }] }),
+      }, { enabled: runtimeOptions.safeEgress });
+      scraped[node.id] = { status: emailRes.status, ok: emailRes.ok };
+      if (!emailRes.ok) throw new Error(`Email delivery failed (${emailRes.status}).`);
+      onLog(`${label} Email sent.`);
       break;
     }
 
@@ -880,11 +963,20 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
       const hash = crypto.createHash('sha256').update(content).digest('hex');
       // For cloud runs, store state in Firestore if db is available, otherwise in-memory
       let prevHash;
-      if (opts.db) {
+      if (runtimeOptions?.db && uid && workflow?.id) {
         try {
-          const stateDoc = await opts.db.collection('monitor_state').doc(node.id).get();
+          const stateRef = runtimeOptions.db.collection('stanley_users').doc(uid).collection('monitor_state').doc(`${workflow.id}:${node.id}`);
+          const stateDoc = await stateRef.get();
           prevHash = stateDoc.exists ? stateDoc.data().hash : undefined;
-          await opts.db.collection('monitor_state').doc(node.id).set({ hash, updatedAt: new Date() });
+          if (runtimeOptions.twoPhaseMonitors && runId) {
+            await runtimeOptions.db.collection('stanley_users').doc(uid).collection('monitor_candidates').doc(`${runId}:${node.id}`).set({
+              runId, workflowId: workflow.id, nodeId: node.id, baselineId: `${workflow.id}:${node.id}`,
+              hash, previousHash: prevHash ?? null, state: 'pending', createdAt: new Date().toISOString(),
+              expiresAt: new Date(Date.now() + 7 * 86400000),
+            });
+          } else {
+            await stateRef.set({ hash, workflowId: workflow.id, nodeId: node.id, updatedAt: new Date() });
+          }
         } catch { /* first run or db error */ }
       }
       const changed = prevHash !== undefined && prevHash !== hash;
@@ -901,7 +993,7 @@ async function runGraphNode(agent, node, { onLog, secrets, scraped, ctx, label, 
     }
 
     default:
-      onLog(`${label} Unknown node type "${node.type}" — skipped.`);
+      throw new Error(`Unsupported node type "${node.type}". Replace or remove it before running.`);
   }
 }
 
@@ -1118,15 +1210,13 @@ function getPath(obj, path) {
 }
 
 function interpolateFields(data, ctx, scraped) {
-  const FIELDS = ['url', 'value', 'description', 'selector'];
-  let copy = null;
-  for (const f of FIELDS) {
-    if (typeof data[f] === 'string' && data[f].includes('{{')) {
-      copy = copy || { ...data };
-      copy[f] = interpolate(data[f], ctx, scraped);
-    }
-  }
-  return copy || data;
+  const visit = (value) => {
+    if (typeof value === 'string') return value.includes('{{') ? interpolate(value, ctx, scraped) : value;
+    if (Array.isArray(value)) return value.map(visit);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
+    return value;
+  };
+  return visit(data);
 }
 
 // ── Sub nodes (parameter merging) ────────────────────────────────────────────
@@ -1157,6 +1247,17 @@ function describeParams(params) {
   return Object.entries(params)
     .map(([k, v]) => `${k}: ${String(v).startsWith('vault:') ? '[secret]' : v}`)
     .join('; ');
+}
+
+function parseObject(value, label) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch { /* handled below */ }
+  }
+  throw new Error(`${label} must be a JSON object.`);
 }
 
 

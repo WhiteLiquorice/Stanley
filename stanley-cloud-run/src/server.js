@@ -11,6 +11,8 @@ const {
   requiresPreflightApproval,
 } = require('./runLifecycle');
 const { createDispatcher } = require('./dispatcher');
+const { RunEntitlementService } = require('./runEntitlements');
+const { GoogleOAuthService, installGoogleOAuthRoutes } = require('./googleOAuth');
 const { installConnectorOverlay } = require('./runner-integration/src/connectorServerOverlay');
 const { installSkillOverlay } = require('./runner-integration/src/skillExecution');
 const { installOrchestrationOverlay } = require('./runner-integration/src/orchestrationExecution');
@@ -26,18 +28,30 @@ const { createBrowserRuntimeRouter, getBrowserRuntimeServices } = require('./bro
 const { ArtifactService, createArtifactRouter } = require('./artifact-engine');
 const { WorkflowPlatformStore, WorkflowPlatformService, createWorkflowPlatformRouter, validateWorkflowInput, validateWorkflowOutput } = require('./workflow-platform');
 const { McpService, installMcpRoutes } = require('./mcp-engine');
+const { createNativeIntegrationRouter } = require('./native-integration-engine');
+const { ConversationApplicationService, ConversationService, FirestoreConversationProposalStore, createConversationRouter } = require('./conversation-engine');
+const { callConversationModel } = require('./vertexConversationModel');
+const { CapabilityRegistry } = require('./capability-engine');
+const { applySelectorProposal, collectVaultReferences, emitTelemetry, errorTelemetry, isReliabilityEnabled, lintWorkflow, listSelectorProposals, reliabilitySnapshot, TenantAdmissionController } = require('./reliability');
 
 const projectId = process.env.STANLEY_PROJECT_ID || 'bridgeway-db29e';
 const internalKey = process.env.RUNNER_INTERNAL_KEY || '';
-const allowLegacyRun = process.env.ALLOW_LEGACY_RUN !== 'false';
+const allowLegacyRun = process.env.ALLOW_LEGACY_RUN === 'true';
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map((origin) => origin.trim()).filter(Boolean);
 
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 const runs = new RunStore(db);
-const artifactService = new ArtifactService({ db, bucket: admin.storage().bucket(process.env.ARTIFACT_BUCKET || undefined) });
+const entitlements = new RunEntitlementService(db, runs);
+const admissionController = new TenantAdmissionController(db, {
+  ratePerMinute: Number(process.env.RUN_SUBMISSIONS_PER_MINUTE || 30),
+  burst: Number(process.env.RUN_SUBMISSION_BURST || 10),
+});
+const bucketName = process.env.ARTIFACT_BUCKET || `${projectId}.appspot.com`;
+const artifactService = new ArtifactService({ db, bucket: admin.storage().bucket(bucketName) });
 const app = express();
+const googleOAuth = new GoogleOAuthService(db);
 // A 10 MiB binary artifact expands to roughly 13.4 MiB as base64.
 app.use('/v1/artifacts', express.json({ limit: '15mb' }));
 app.use(express.json({ limit: '2mb' }));
@@ -72,9 +86,35 @@ async function authenticateUser(req) {
   } catch {
     throw httpError(401, 'Invalid or expired ID token.');
   }
-  const user = await db.collection('stanley_users').doc(token.uid).get();
-  if (!user.exists || user.data().status !== 'active') throw httpError(403, 'No active Stanley license for this account.');
+  const userRef = db.collection('stanley_users').doc(token.uid);
+  let user = await userRef.get();
+  if (!user.exists) {
+    const now = new Date().toISOString();
+    await userRef.set({ email: token.email || '', status: 'free', paid: false, runs_used: 0, runs_reserved: 0, createdAt: now, updatedAt: now }, { merge: false });
+    user = await userRef.get();
+  }
+  if (!user.data()?.paid && token.email) {
+    const pendingRef = db.collection('pending_payments').doc(String(token.email).toLowerCase().trim());
+    const pending = await pendingRef.get();
+    if (pending.exists && pending.data()?.paid === true) {
+      await userRef.set({ ...pending.data(), email: token.email, status: 'active', paid: true, activatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, { merge: true });
+      await pendingRef.delete();
+      user = await userRef.get();
+    }
+  }
+  if (['disabled', 'suspended'].includes(user.data()?.status)) throw httpError(403, 'This Stanley account is not currently available.');
   return token.uid;
+}
+
+installGoogleOAuthRoutes({ app, service: googleOAuth, authenticateUser });
+
+async function resolveRunSecrets(dbInstance, uid, refs = null) {
+  const secrets = await resolveSecrets(dbInstance, uid, refs);
+  if (!refs || refs.includes('GoogleOAuthToken')) {
+    const token = await googleOAuth.accessToken(uid);
+    if (token) secrets.GoogleOAuthToken = token;
+  }
+  return secrets;
 }
 
 function authenticateInternal(req) {
@@ -97,9 +137,10 @@ async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idem
   const { policy } = validateWorkflow(executionSource);
   validateWorkflowInput(executionSource, input);
   const id = makeRunId(uid, workflowId, idempotencyKey);
-  const approvalRequired = requiresPreflightApproval(workflow);
+  const approvalRequired = !isReliabilityEnabled('NODE_SCOPED_APPROVALS') && requiresPreflightApproval(workflow);
+  const admission = isReliabilityEnabled('FAIR_QUEUEING') ? await admissionController.reserve(uid) : { delaySeconds: 0 };
   const now = new Date().toISOString();
-  return runs.create(uid, {
+  return entitlements.create(uid, {
     id,
     workflowId,
     workflowName: workflow.name || 'Workflow',
@@ -111,6 +152,7 @@ async function createRun(uid, workflowId, { input = {}, trigger = 'Manual', idem
     executionPolicy: policy,
     releaseId: selectedReleaseId,
     attempts: 0,
+    queueDelaySeconds: admission.delaySeconds,
     createdAt: now,
     updatedAt: now,
     timestamp: new Date().toLocaleString('en-US'),
@@ -129,7 +171,7 @@ const promoteSkillTemplate = async (uid, skill) => {
 };
 
 const connectorOverlay = installConnectorOverlay({
-  app, db, authenticateUser, resolveAllSecrets: resolveSecrets,
+  app, db, authenticateUser, resolveAllSecrets: resolveRunSecrets,
   callModel: callConnectorModel,
   logger: (event) => console.log(JSON.stringify({ component: 'connector-engine', ...event })),
   onPublished: promoteConnectorTemplate,
@@ -137,7 +179,7 @@ const connectorOverlay = installConnectorOverlay({
 
 const skillOverlay = installSkillOverlay({
   app, db, authenticateUser, runWorkflow: runWorkflowWithContext,
-  trustStore: connectorOverlay.trustStore, resolveAllSecrets: resolveSecrets,
+  trustStore: connectorOverlay.trustStore, resolveAllSecrets: resolveRunSecrets,
   onActivated: promoteSkillTemplate,
   artifactService,
 });
@@ -148,39 +190,93 @@ app.use('/v1/templates', async (req, res, next) => { try { req.uid = await authe
 
 const orchestrationOverlay = installOrchestrationOverlay({
   app, db, authenticateUser, authenticateInternal,
-  dispatch: async (uid, runId) => { await runs.patch(uid, runId, { state: 'queued', wait: null, logs: ['[System] Durable wait satisfied; run queued to resume.'] }); return dispatcher.dispatch(uid, runId); },
+  dispatch: async (uid, runId) => {
+    await runs.patch(uid, runId, { state: 'queued', wait: null, logs: ['[System] Durable wait satisfied; run queued to resume.'] });
+    return dispatcher.dispatch(uid, runId, 0, { dispatchKey: `resume:${Date.now()}` });
+  },
 });
 
 const learningOverlay = installLearningOverlay({ app, express, db, authenticateUser, proposeOperations: proposeRepairOperations });
 const memoryOverlay = installMemoryOverlay({ app, express, db, authenticateUser });
-const monitoringOverlay = installMonitoringOverlay({ app, express, db, authenticateUser, authenticateInternal, connectorService: connectorOverlay.service, resolveAllSecrets: resolveSecrets, trustStore: connectorOverlay.trustStore });
+const monitoringOverlay = installMonitoringOverlay({ app, express, db, authenticateUser, authenticateInternal, connectorService: connectorOverlay.service, resolveAllSecrets: resolveRunSecrets, trustStore: connectorOverlay.trustStore });
 const browserRuntimeServices = getBrowserRuntimeServices(db);
 app.use(createBrowserRuntimeRouter({ express, authenticateUser, services: browserRuntimeServices, handleError: errorResponse }));
 app.use(createArtifactRouter({ express, authenticateUser, service: artifactService, handleError: errorResponse }));
+app.use(createNativeIntegrationRouter({ express, authenticateUser }));
+const conversationProposalStore = new FirestoreConversationProposalStore(db);
+const capabilityRegistry = new CapabilityRegistry({ connectorStore: connectorOverlay.service.store, skillStore: skillOverlay.service.store });
+const conversationService = new ConversationService({ callModel: callConversationModel, loadWorkflow, proposalStore: conversationProposalStore, capabilityRegistry });
+const conversationApplicationService = new ConversationApplicationService({ store: conversationProposalStore, loadWorkflow });
+app.use(createConversationRouter({ express, authenticateUser, service: conversationService, applicationService: conversationApplicationService, handleError: errorResponse }));
 const workflowPlatform = new WorkflowPlatformService({ store: new WorkflowPlatformStore(db), loadWorkflow });
 
+app.get('/v1/workflows/:workflowId/selector-proposals', async (req, res) => {
+  try { const uid = await authenticateUser(req); return res.json({ success: true, proposals: await listSelectorProposals(db, uid, req.params.workflowId) }); }
+  catch (error) { return errorResponse(res, error); }
+});
+app.post('/v1/workflows/:workflowId/selector-proposals/:proposalId/apply', async (req, res) => {
+  try { const uid = await authenticateUser(req); return res.json({ success: true, proposal: await applySelectorProposal(db, uid, req.params.workflowId, req.params.proposalId, uid) }); }
+  catch (error) { return errorResponse(res, error); }
+});
+app.get('/v1/workflows/:workflowId/preflight', async (req, res) => {
+  try { const uid = await authenticateUser(req); const workflow = await loadWorkflow(uid, req.params.workflowId); const report = lintWorkflow(workflow); return res.status(report.valid ? 200 : 422).json({ success: report.valid, report }); }
+  catch (error) { return errorResponse(res, error); }
+});
+
 async function executeRun(uid, runId) {
+  const useRunLeases = isReliabilityEnabled('TRANSACTIONAL_RUN_LEASES');
   let run = await runs.get(uid, runId);
   if (!run) throw httpError(404, 'Run not found.');
-  if (!EXECUTABLE_STATES.has(run.state)) return publicRun(run);
+  const expiredRunningLease = run.state === 'running' && Number(run.lease?.expiresAtMs || 0) <= Date.now();
+  if (!EXECUTABLE_STATES.has(run.state) && !(useRunLeases && expiredRunningLease)) return publicRun(run);
 
   let workflow = await loadWorkflow(uid, run.workflowId);
   if (run.releaseId) workflow = await workflowPlatform.store.getRelease(uid, run.workflowId, run.releaseId) || workflow;
   const { policy } = validateWorkflow(workflow);
-  let executableWorkflow = prepareApprovedWorkflow(workflow, Boolean(run.approvedAt));
+  let executableWorkflow = isReliabilityEnabled('NODE_SCOPED_APPROVALS')
+    ? workflow
+    : prepareApprovedWorkflow(workflow, Boolean(run.approvedAt));
   const startedAtMs = Date.now();
-  run = await runs.patch(uid, runId, {
-    state: 'running',
-    attempts: Number(run.attempts || 0) + 1,
-    startedAt: new Date().toISOString(),
-    logs: [...(run.logs || []), '[System] Execution started.'],
-  });
+  let leaseId = null;
+  if (useRunLeases) {
+    run = await runs.claim(uid, runId);
+    if (!run) return publicRun(await runs.get(uid, runId));
+    leaseId = run.lease.id;
+  } else {
+    run = await runs.patch(uid, runId, {
+      state: 'running',
+      attempts: Number(run.attempts || 0) + 1,
+      startedAt: new Date().toISOString(),
+      logs: [...(run.logs || []), '[System] Execution started.'],
+    });
+  }
+  const patchExecution = (patch, options = {}) => leaseId
+    ? runs.patchClaimed(uid, runId, leaseId, patch, options)
+    : runs.patch(uid, runId, patch);
+  let lastHeartbeatAt = startedAtMs;
+  emitTelemetry('run_started', { uid, runId, workflowId: run.workflowId, state: run.state, attempt: run.attempts, dispatchMode: dispatcher.mode });
+  const heartbeat = async () => {
+    if (!leaseId || Date.now() - lastHeartbeatAt < 15_000) return;
+    await runs.heartbeat(uid, runId, leaseId);
+    lastHeartbeatAt = Date.now();
+  };
 
   let orchestration = null;
   let learningRollout = null;
   let memoryIds = [];
   try {
-    const secrets = await resolveSecrets(db, uid);
+    let secretRefs = null;
+    if (isReliabilityEnabled('SCOPED_SECRET_LOADING')) {
+      secretRefs = [...collectVaultReferences(executableWorkflow)];
+      const preferredSkill = (executableWorkflow.capabilityPlan || []).find((item) => item.kind === 'skill');
+      const skillSelection = await skillOverlay.service.select({
+        tenantId: uid, workflowId: executableWorkflow.id, operationName: executableWorkflow.operationName,
+        tags: executableWorkflow.tags || [], targetDomain: '', skillId: preferredSkill?.id, skillVersion: preferredSkill?.version,
+      });
+      skillSelection.selected?.requiredVaultRefs?.forEach((ref) => secretRefs.push(ref));
+      secretRefs = [...new Set(secretRefs)];
+    }
+    const secrets = await resolveRunSecrets(db, uid, secretRefs);
     monitoringOverlay.assertAllowed(executableWorkflow);
     const learningSelection = await learningOverlay.candidateForRun(uid, executableWorkflow, runId);
     executableWorkflow = learningSelection.workflow; learningRollout = learningSelection.rollout;
@@ -189,7 +285,21 @@ async function executeRun(uid, runId) {
     orchestration = await orchestrationOverlay.runtimeFor({ uid, runId, workflow: executableWorkflow });
     let skillAttempt;
     try {
-      skillAttempt = await skillOverlay.executeBeforeWorkflow({ uid, runId, workflow: executableWorkflow, input: run.input || {}, secrets, mode: executableWorkflow.trustPolicy?.mode || 'live', orchestration });
+      skillAttempt = await skillOverlay.executeBeforeWorkflow({
+        uid, runId, workflow: executableWorkflow, input: run.input || {}, secrets,
+        mode: executableWorkflow.trustPolicy?.mode || 'live', orchestration,
+        runnerOptions: {
+          onLeaseHeartbeat: heartbeat,
+          effectLedgerEnabled: isReliabilityEnabled('EFFECT_LEDGER'),
+          skipCompletedNodes: isReliabilityEnabled('EFFECT_LEDGER') || isReliabilityEnabled('NODE_SCOPED_APPROVALS'),
+          twoPhaseMonitors: isReliabilityEnabled('TWO_PHASE_MONITORS'),
+          safeEgress: isReliabilityEnabled('SAFE_EGRESS'),
+          providerResilience: isReliabilityEnabled('PROVIDER_RESILIENCE'),
+          traceBatching: isReliabilityEnabled('TRACE_BATCHING'),
+          selectorQuarantine: isReliabilityEnabled('WORKFLOW_REVISIONS'),
+          distributedBrowserLeases: isReliabilityEnabled('DISTRIBUTED_BROWSER_LEASES'),
+        },
+      });
     } catch (skillError) {
       if (!skillError.safeToFallback) throw skillError;
       skillAttempt = { executed: false, safeToFallback: true, error: skillError.message };
@@ -206,7 +316,18 @@ async function executeRun(uid, runId) {
       result = await executeTrustedWorkflow({
         store: connectorOverlay.trustStore, uid, runId, workflow: executableWorkflow,
         secrets, input: run.input || {}, runRecord: run, runner: runWorkflowWithContext,
-        runnerOptions: { db, uid, runId, policy, connectorRuntime: connectorOverlay.connectorRuntime, orchestration, artifactService },
+        runnerOptions: {
+          db, uid, runId, policy, connectorRuntime: connectorOverlay.connectorRuntime, orchestration, artifactService,
+          onLeaseHeartbeat: heartbeat,
+          effectLedgerEnabled: isReliabilityEnabled('EFFECT_LEDGER'),
+          skipCompletedNodes: isReliabilityEnabled('EFFECT_LEDGER') || isReliabilityEnabled('NODE_SCOPED_APPROVALS'),
+          twoPhaseMonitors: isReliabilityEnabled('TWO_PHASE_MONITORS'),
+          safeEgress: isReliabilityEnabled('SAFE_EGRESS'),
+          providerResilience: isReliabilityEnabled('PROVIDER_RESILIENCE'),
+          traceBatching: isReliabilityEnabled('TRACE_BATCHING'),
+          selectorQuarantine: isReliabilityEnabled('WORKFLOW_REVISIONS'),
+          distributedBrowserLeases: isReliabilityEnabled('DISTRIBUTED_BROWSER_LEASES'),
+        },
         trustMode: executableWorkflow.trustPolicy?.mode || 'live',
         resumeCheckpoint: run.resumeCheckpoint || null,
       });
@@ -218,7 +339,7 @@ async function executeRun(uid, runId) {
     if (learningRollout) await learningOverlay.recordOutcome(uid, learningRollout.id, { success: !cancelRequested, runId });
     if (memoryIds.length) await memoryOverlay.recordOutcome(uid, memoryIds, !cancelRequested);
     await monitoringOverlay.record(uid, { workflowId: executableWorkflow.id, runId, success: !cancelRequested, verified: result.trustState !== 'needs_attention', durationMs: Date.now() - startedAtMs, costMicros: Number(result.executionCostMicros || 0), modelCalls: Number(result.modelCalls || 0), component: result.skillExecution ? { type: 'skill', ...result.skillExecution } : null });
-    run = await runs.patch(uid, runId, {
+    run = await patchExecution({
       state: cancelRequested ? 'cancelled' : 'completed',
       success: !cancelRequested,
       completedAt: new Date().toISOString(),
@@ -232,12 +353,15 @@ async function executeRun(uid, runId) {
       trustReport: result.trustReport,
       skillExecution: result.skillExecution || null,
       modelUsage: result.modelUsage || null,
-    });
+    }, { releaseLease: true });
+    await entitlements.settle(uid, runId, !cancelRequested);
+    emitTelemetry('run_finished', { uid, runId, workflowId: run.workflowId, state: run.state, attempt: run.attempts, durationMs: Date.now() - startedAtMs });
     return publicRun(run);
   } catch (error) {
     if (error?.code === 'WORKFLOW_SUSPENDED') {
       const wait = { ...(error.wait || {}) }; delete wait.tokenHash;
-      run = await runs.patch(uid, runId, { state: 'waiting', success: false, wait, logs: error.logs || [`[System] Waiting for ${wait.type || 'external event'}.`] });
+      run = await patchExecution({ state: 'waiting', success: false, wait, logs: error.logs || [`[System] Waiting for ${wait.type || 'external event'}.`] }, { releaseLease: true });
+      emitTelemetry('run_suspended', { uid, runId, workflowId: run.workflowId, state: 'waiting', waitType: wait.type, nodeId: wait.nodeId });
       return publicRun(run);
     }
     if (orchestration) await orchestrationOverlay.coordinator.failRun(uid, runId, error).catch((orchestrationError) => console.error('[Orchestration] Failure finalization error:', orchestrationError));
@@ -247,7 +371,7 @@ async function executeRun(uid, runId) {
     await learningOverlay.observeFailure(uid, { workflowId: executableWorkflow.id, runId, nodeId: error.nodeId || null, nodeType: error.nodeType || null, error, url: error.url || '', nodeData: error.nodeData || null }).catch((learningError) => console.error('[Learning] Failure capture error:', learningError));
     const attempts = Number(run.attempts || 1);
     const canRetry = !orchestration && policy.retrySafe && attempts < policy.maxRunAttempts;
-    run = await runs.patch(uid, runId, {
+    run = await patchExecution({
       state: canRetry ? 'retrying' : 'failed',
       success: false,
       completedAt: canRetry ? null : new Date().toISOString(),
@@ -255,8 +379,10 @@ async function executeRun(uid, runId) {
       duration: `${Math.round((Date.now() - startedAtMs) / 1000)}s`,
       error: error.message || 'Workflow execution failed.',
       logs: error.logs || [`[System] ${error.message || 'Workflow execution failed.'}`],
-    });
-    if (canRetry) await dispatcher.dispatch(uid, runId, Math.min(60, 2 ** attempts));
+    }, { releaseLease: true });
+    if (!canRetry) await entitlements.settle(uid, runId, false);
+    emitTelemetry('run_failed', { uid, runId, workflowId: run.workflowId, state: run.state, attempt: attempts, durationMs: Date.now() - startedAtMs, ...errorTelemetry(error), nodeId: error.nodeId, nodeType: error.nodeType });
+    if (canRetry) await dispatcher.dispatch(uid, runId, Math.min(60, 2 ** attempts), { dispatchKey: `attempt:${attempts + 1}` });
     return publicRun(run);
   }
 }
@@ -272,7 +398,7 @@ app.use(createTrustRouter({
     if (!checkpoint?.resumable) throw httpError(409, 'No safe resumable checkpoint is available.');
     let retry = await createRun(uid, exception.workflowId, { trigger: 'Safe retry', idempotencyKey: `trust-retry:${exceptionId}:${checkpoint.id}` });
     retry = await runs.patch(uid, retry.id, { resumeCheckpoint: checkpoint, retryOfRunId: exception.runId, retryOfExceptionId: exceptionId });
-    if (retry.state !== 'pending_approval') await dispatcher.dispatch(uid, retry.id);
+    if (retry.state !== 'pending_approval') await dispatcher.dispatch(uid, retry.id, 0, { dispatchKey: 'trust-retry' });
     return { runId: retry.id, state: retry.state };
   },
   handleError: errorResponse,
@@ -281,13 +407,13 @@ app.use(createTrustRouter({
 async function submitRun(uid, workflowId, options) {
   const run = await createRun(uid, workflowId, options);
   if (run.duplicate || run.state === 'pending_approval') return publicRun(run);
-  const dispatched = await dispatcher.dispatch(uid, run.id);
+  const dispatched = await dispatcher.dispatch(uid, run.id, Number(run.queueDelaySeconds || 0), { dispatchKey: 'initial' });
   if (dispatcher.mode === 'inline') return dispatched;
   return publicRun(await runs.get(uid, run.id));
 }
 
 app.get('/', (_req, res) => res.status(200).send('Stanley cloud runner OK'));
-app.get('/health', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
+app.get('/health', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode, reliability: reliabilitySnapshot() }));
 app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, dispatchMode: dispatcher.mode }));
 
 app.post('/v1/workflows/:workflowId/runs', async (req, res) => {
@@ -314,15 +440,35 @@ app.post('/v1/runs/:runId/approval', async (req, res) => {
     const uid = await authenticateUser(req);
     const run = await runs.get(uid, req.params.runId);
     if (!run) throw httpError(404, 'Run not found.');
-    if (run.state !== 'pending_approval') throw httpError(409, 'Run is not awaiting approval.');
     const decision = req.body?.decision;
+    if (isReliabilityEnabled('NODE_SCOPED_APPROVALS') && run.state === 'waiting' && run.wait?.type === 'approval') {
+      if (decision === 'reject') {
+        await orchestrationOverlay.coordinator.cancelRun(uid, run.id, 'approval_rejected');
+        const rejected = await runs.patch(uid, run.id, { state: 'cancelled', rejectedAt: new Date().toISOString(), success: false, wait: null });
+        await entitlements.settle(uid, run.id, false);
+        return res.json({ success: false, run: publicRun(rejected) });
+      }
+      if (decision !== 'approve') throw httpError(400, 'Decision must be approve or reject.');
+      const eventId = String(req.body?.eventId || `approval:${run.id}:${run.wait.correlationId}`);
+      const result = await orchestrationOverlay.coordinator.signal(uid, run.id, {
+        correlationId: run.wait.correlationId,
+        token: run.wait.token,
+        eventId,
+        type: 'approval',
+        payload: { decision: 'approve', approvedBy: uid, approvedAt: new Date().toISOString() },
+      });
+      const resumed = await runs.get(uid, run.id);
+      return res.status(result.resumed ? 202 : 200).json({ success: resumed?.state === 'completed', run: publicRun(resumed) });
+    }
+    if (run.state !== 'pending_approval') throw httpError(409, 'Run is not awaiting approval.');
     if (decision === 'reject') {
       const rejected = await runs.patch(uid, run.id, { state: 'cancelled', rejectedAt: new Date().toISOString(), success: false });
+      await entitlements.settle(uid, run.id, false);
       return res.json({ success: false, run: publicRun(rejected) });
     }
     if (decision !== 'approve') throw httpError(400, 'Decision must be approve or reject.');
     await runs.patch(uid, run.id, { state: 'approved', approvedAt: new Date().toISOString() });
-    const dispatched = await dispatcher.dispatch(uid, run.id);
+    const dispatched = await dispatcher.dispatch(uid, run.id, 0, { dispatchKey: `approval:${run.approvedAt || 'approved'}` });
     const finalRun = dispatcher.mode === 'inline' ? dispatched : await runs.get(uid, run.id);
     return res.status(['approved', 'queued', 'running'].includes(finalRun.state) ? 202 : 200).json({ success: finalRun.state === 'completed', run: publicRun(finalRun) });
   } catch (error) { return errorResponse(res, error); }
@@ -336,6 +482,7 @@ app.post('/v1/runs/:runId/cancel', async (req, res) => {
     if (['completed', 'failed', 'cancelled'].includes(run.state)) throw httpError(409, 'Run has already finished.');
     const state = run.state === 'running' ? 'cancel_requested' : 'cancelled';
     const updated = await runs.patch(uid, run.id, { state, cancelRequestedAt: new Date().toISOString(), success: false });
+    if (state === 'cancelled') await entitlements.settle(uid, run.id, false);
     return res.status(state === 'cancel_requested' ? 202 : 200).json({ success: false, run: publicRun(updated) });
   } catch (error) { return errorResponse(res, error); }
 });
@@ -403,7 +550,7 @@ app.post('/v1/workflows/:workflowId/invoke', async (req, res) => {
 async function executeDebugWorkflow(uid, workflow, { input = {}, runId } = {}) {
   const { policy } = validateWorkflow(workflow);
   validateWorkflowInput(workflow, input);
-  const secrets = await resolveSecrets(db, uid);
+  const secrets = await resolveRunSecrets(db, uid);
   return runWorkflowWithContext(workflow, secrets, input, { db, uid, runId, policy: { ...policy, allowAgenticRecovery: false }, artifactService });
 }
 

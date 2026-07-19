@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Key, Trash2, Loader } from 'lucide-react';
+import { Plus, Key, Trash2, Loader, Unplug } from 'lucide-react';
 
 import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
+import { connectGoogle, disconnectGoogle, getGoogleConnection, type GoogleConnectionStatus } from '../lib/googleOAuthClient';
 
 interface Secret {
   id: string;
@@ -25,10 +26,21 @@ export function Vault() {
   const [secretType, setSecretType] = useState('API Key');
   const [secretUsername, setSecretUsername] = useState('');
   const [secretPassword, setSecretPassword] = useState('');
+  const [google, setGoogle] = useState<GoogleConnectionStatus | null>(null);
+  const [googleBusy, setGoogleBusy] = useState(false);
 
   useEffect(() => {
     fetchSecrets();
+    getGoogleConnection().then(setGoogle).catch(() => setGoogle({ configured: false, connected: false }));
   }, []);
+
+  const handleGoogle = async () => {
+    setGoogleBusy(true);
+    try {
+      if (google?.connected) { await disconnectGoogle(); setGoogle({ ...google, connected: false }); setGoogleBusy(false); }
+      else await connectGoogle();
+    } catch (error: any) { alert(error.message || 'Could not update the Google connection.'); setGoogleBusy(false); }
+  };
 
   const fetchSecrets = async () => {
     try {
@@ -102,6 +114,18 @@ export function Vault() {
           onClick={() => setShowAddModal(true)}
         >
           <Plus size={14} /> Add New Secret
+        </button>
+      </div>
+
+      <div className="mb-6 bg-white border border-[#EAE6DF] rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+        <div>
+          <h3 className="text-sm font-bold text-slate-800">Google Workspace</h3>
+          <p className="text-xs text-slate-500 mt-1">One secure connection for Gmail, Sheets, Calendar, and Drive. Refresh tokens remain server-side.</p>
+          <p className={`text-[10px] font-bold uppercase tracking-wider mt-2 ${google?.connected ? 'text-emerald-600' : 'text-slate-400'}`}>{google?.connected ? 'Connected' : google?.configured === false ? 'Needs server configuration' : 'Not connected'}</p>
+        </div>
+        <button className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold ${google?.connected ? 'bg-white border border-rose-200 text-rose-600' : 'bg-indigo-600 text-white'}`} onClick={handleGoogle} disabled={googleBusy || google?.configured === false}>
+          {googleBusy ? <Loader size={14} className="animate-spin"/> : google?.connected ? <Unplug size={14}/> : <Key size={14}/>}
+          {google?.connected ? 'Disconnect Google' : 'Connect Google'}
         </button>
       </div>
 

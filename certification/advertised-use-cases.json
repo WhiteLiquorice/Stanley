@@ -1,0 +1,18 @@
+[
+  {
+    "id": "production-v2-maps-lead-list",
+    "ad": "reels/dist/production-v2-maps-lead-list.mp4",
+    "templateId": "tpl-google-maps-local-leads",
+    "expectedCount": 42,
+    "requiredNodeTypes": ["scroll_until", "dom_extract_list", "visit_each", "assertion"],
+    "requiredOutputFields": ["name", "address", "phone", "listingUrl"]
+  },
+  {
+    "id": "production-v2-research-links",
+    "ad": "reels/dist/production-v2-research-links.mp4",
+    "templateId": "tpl-pinterest-research-collector",
+    "expectedCount": 24,
+    "requiredNodeTypes": ["scroll_until", "dom_extract_list", "visit_each", "filter_list", "assertion"],
+    "requiredOutputFields": ["sourceUrl", "pinUrl"]
+  }
+]

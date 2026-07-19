@@ -8,15 +8,20 @@ WORKDIR /app
 # so skip the post-install browser download.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # Install Python3 for API scripting fallbacks
-RUN apt-get update && apt-get install -y python3 python3-pip && pip3 install requests beautifulsoup4
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip \
+    && pip3 install --no-cache-dir requests beautifulsoup4 \
+    && rm -rf /var/lib/apt/lists/*
 
 # App source (engine files are flat copies of the desktop daemon — see README).
 COPY . .
 
 ENV NODE_ENV=production
 ENV PORT=8080
+# New runner revisions use the fully implemented reliability profile. Operators
+# can set STANLEY_RELIABILITY_V2=false on a revision for an immediate compatibility rollback.
+ENV STANLEY_RELIABILITY_V2=true
 EXPOSE 8080
 CMD ["node", "src/server.js"]

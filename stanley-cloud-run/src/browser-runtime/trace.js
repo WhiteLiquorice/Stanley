@@ -18,13 +18,14 @@ function sanitizeSnapshot(snapshot) {
 }
 
 class PrivacySafeTrace {
-  constructor({ store, uid, runId, clock = () => new Date().toISOString(), retentionDays = 14 }) {
-    Object.assign(this, { store, uid, runId, clock, retentionDays });
+  constructor({ store, uid, runId, clock = () => new Date().toISOString(), retentionDays = 14, batching = false, batchSize = 20 }) {
+    Object.assign(this, { store, uid, runId, clock, retentionDays, batching, batchSize });
     this.sequence = 0;
     this.networkEvents = 0;
     this.maxEvents = 1000;
     this.maxNetworkEvents = 300;
     this.pending = new Set();
+    this.buffer = [];
     this.listeners = [];
   }
   record(kind, fields = {}) {
@@ -38,17 +39,22 @@ class PrivacySafeTrace {
       errorCode: fields.errorCode || null, snapshot: sanitizeSnapshot(fields.snapshot),
       expiresAt: new Date(Date.parse(occurredAt) + this.retentionDays * 86400000),
     };
+    if (this.batching && typeof this.store.appendTraceBatch === 'function') {
+      this.buffer.push(event);
+      return this.buffer.length >= this.batchSize ? this.flush() : Promise.resolve(event);
+    }
     const write = Promise.resolve(this.store.appendTrace(this.uid, this.runId, event)).finally(() => this.pending.delete(write));
     this.pending.add(write);
     return write;
   }
+  async flush() { if (!this.buffer.length) return []; const events = this.buffer.splice(0); return this.store.appendTraceBatch(this.uid, this.runId, events); }
   attach(page) {
     const onRequest = (request) => { this.record('network_request', { url: request.url(), method: request.method() }).catch(() => {}); };
     const onResponse = (response) => { this.record('network_response', { url: response.url(), status: response.status() }).catch(() => {}); };
     page.on('request', onRequest); page.on('response', onResponse);
     this.listeners.push(() => { page.off('request', onRequest); page.off('response', onResponse); });
   }
-  async close() { for (const remove of this.listeners.splice(0)) remove(); await Promise.allSettled([...this.pending]); }
+  async close() { for (const remove of this.listeners.splice(0)) remove(); await this.flush(); await Promise.allSettled([...this.pending]); }
 }
 
 module.exports = { PrivacySafeTrace, digest, safeUrl, sanitizeSnapshot };

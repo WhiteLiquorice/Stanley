@@ -13,8 +13,37 @@
  * @param {string} uid
  * @returns {Promise<Record<string,string>>}
  */
-async function resolveSecrets(db, uid) {
-  const snap = await db.collection('stanley_users').doc(uid).collection('vault').get();
+function splitReference(ref) {
+  const match = String(ref || '').match(/^(.*)\.(username|email|password)$/);
+  return match ? { base: match[1], field: match[2] } : { base: String(ref || ''), field: 'value' };
+}
+
+function valueForReference(secret, field) {
+  if (field === 'username' || field === 'email') return secret.username;
+  if (field === 'password') return secret.password;
+  return secret.value;
+}
+
+async function resolveSecrets(db, uid, references = null) {
+  const vault = db.collection('stanley_users').doc(uid).collection('vault');
+  if (Array.isArray(references)) {
+    const map = {};
+    const unique = [...new Set(references.map(String).filter(Boolean))];
+    for (const ref of unique) {
+      const { base, field } = splitReference(ref);
+      let snapshot = await vault.doc(base).get();
+      if (!snapshot.exists) {
+        const named = await vault.where('name', '==', base).limit(1).get();
+        snapshot = named.docs[0] || null;
+      }
+      if (!snapshot?.exists) continue;
+      const value = valueForReference(snapshot.data(), field);
+      if (value != null) map[ref] = value;
+    }
+    return map;
+  }
+
+  const snap = await vault.get();
   const map = {};
   snap.forEach((doc) => {
     const s = { id: doc.id, ...doc.data() };
@@ -39,4 +68,4 @@ async function resolveSecrets(db, uid) {
   return map;
 }
 
-module.exports = { resolveSecrets };
+module.exports = { resolveSecrets, splitReference, valueForReference };

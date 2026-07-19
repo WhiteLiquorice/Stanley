@@ -68,7 +68,7 @@ export function LiveViewPanel({ isOpen, onClose, logs, screenshotUrl }: LiveView
           
           <div className="flex-1 overflow-y-auto font-mono text-[11px] text-emerald-400/90 leading-relaxed space-y-1.5 pr-2">
             {logs.length === 0 ? (
-              <div className="text-slate-500 italic">[System] Booting local orchestrator engine...</div>
+              <div className="text-slate-500 italic">[System] Preparing workflow execution...</div>
             ) : (
               logs.map((log, idx) => {
                 let colorClass = 'text-emerald-400/90';

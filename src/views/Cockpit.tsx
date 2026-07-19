@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   ReactFlow, 
   Background, 
@@ -41,12 +41,14 @@ import {
 } from 'lucide-react';
 import './Views.css';
 import { listDocs, setDoc, deleteDoc } from '../lib/firestore';
-import { chatCopilot, compilePrompt, runAiAnalysis } from '../lib/stanleyCloud';
-import { runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
+import { chatCopilot, compilePrompt } from '../lib/stanleyCloud';
+import { cancelHeadlessRun, decideHeadlessRun, runHeadless, isHeadlessConfigured } from '../lib/stanleyRunner';
+import { normalizeSchemaInput, SchemaInputForm, schemaDefaults, validateSchemaInput, type JsonSchema } from '../components/SchemaInputForm';
 import { TriggersPanel } from '../components/TriggersPanel';
 import { getIntegrationLabel, getIntegrationsByApp } from '../lib/integrationsCatalog';
 import { WorkflowPlatformModal } from '../components/WorkflowPlatformModal';
 import { uploadArtifact } from '../lib/artifactClient';
+import { emptyNativeIntegrationInput, listNativeIntegrationOperations, type NativeIntegrationOperation } from '../lib/nativeIntegrationClient';
 
 // Interface definitions matching the backend data structure
 interface NodeData {
@@ -73,6 +75,7 @@ interface NodeData {
   maxSteps?: string;
   integrationName?: string;
   query?: string;
+  params?: string;
 }
 
 interface WorkflowNode {
@@ -97,6 +100,27 @@ interface Workflow {
   name: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  inputSchema?: JsonSchema;
+  outputSchema?: Record<string, unknown>;
+  outputNodeId?: string | null;
+  executionPolicy?: Record<string, unknown>;
+  modelPolicy?: Record<string, unknown>;
+  contextPolicy?: Record<string, unknown>;
+  capabilityPlan?: Array<{ kind: 'skill' | 'native_integration' | 'connector' | 'browser'; id: string; version?: string }>;
+}
+
+function ensureWorkflowMission(workflow: Workflow): Workflow {
+  const missions = workflow.nodes.filter((node) => node.type === 'mission');
+  const trigger = workflow.nodes.find((node) => node.type === 'trigger');
+  if (!trigger) return workflow;
+  const primaryMission = missions.find((node) => String(node.data?.prompt || '').trim()) || missions[0];
+  const mission = primaryMission || { id: `mission-${workflow.id}`, type: 'mission', label: 'Mission', data: { prompt: workflow.name || 'Complete this automation reliably.' }, position: { x: 30, y: 30 } };
+  const duplicateIds = new Set(missions.filter((node) => node.id !== mission.id).map((node) => node.id));
+  const nodes = primaryMission ? workflow.nodes.filter((node) => !duplicateIds.has(node.id)) : [mission, ...workflow.nodes];
+  let edges = workflow.edges.filter((edge) => !duplicateIds.has(edge.source) && !duplicateIds.has(edge.target));
+  const hasContext = edges.some((edge) => edge.kind === 'context' && edge.source === mission.id && edge.target === trigger.id);
+  if (!hasContext) edges = [{ source: mission.id, target: trigger.id, kind: 'context' }, ...edges];
+  return nodes.length === workflow.nodes.length && edges.length === workflow.edges.length && hasContext ? workflow : { ...workflow, nodes, edges };
 }
 
 interface Run {
@@ -109,6 +133,8 @@ interface Run {
   timestamp: string;
   logs?: string[];
   scraped?: Record<string, any>;
+  cloudState?: string;
+  waitType?: string;
 }
 
 // React Flow generic data interfaces for typing node.data and edge.data
@@ -230,6 +256,11 @@ const advancedNodeFields: Record<string, Array<{ key: string; label: string; pla
   upload_file: [{ key: 'artifactId', label: 'Tenant artifact ID' }, { key: 'selector', label: 'File input selector' }],
   download_file: [{ key: 'selector', label: 'Download control selector' }, { key: 'description', label: 'Or control description' }],
   mcp_tool: [{ key: 'serverUrl', label: 'MCP endpoint URL' }, { key: 'toolName', label: 'Tool name' }, { key: 'arguments', label: 'Arguments JSON', placeholder: '{}' }, { key: 'vaultKey', label: 'Token vault key' }],
+  scroll_until: [{ key: 'containerSelector', label: 'Scroll container (optional)' }, { key: 'itemSelector', label: 'Repeated item selector' }, { key: 'uniqueByAttribute', label: 'Unique-count attribute (optional)' }, { key: 'targetCount', label: 'Target item count' }, { key: 'maxScrolls', label: 'Maximum scrolls' }, { key: 'settleMs', label: 'Load settle time (ms)' }],
+  dom_extract_list: [{ key: 'itemSelector', label: 'Repeated item selector' }, { key: 'fields', label: 'Field map JSON', placeholder: '{"name":{"selector":"h2","attribute":"text"},"url":{"attribute":"href"}}' }, { key: 'dedupeBy', label: 'Dedupe field' }, { key: 'maxItems', label: 'Maximum items' }],
+  visit_each: [{ key: 'sourceNodeId', label: 'Source list node ID' }, { key: 'urlField', label: 'URL field' }, { key: 'fields', label: 'Detail field map JSON' }, { key: 'maxItems', label: 'Maximum pages' }, { key: 'settleMs', label: 'Page settle time (ms)' }],
+  filter_list: [{ key: 'sourceNodeId', label: 'Source list node ID' }, { key: 'criteria', label: 'Selection criteria' }, { key: 'schema', label: 'Output array schema JSON' }],
+  assertion: [{ key: 'sourceNodeId', label: 'Source list node ID' }, { key: 'minItems', label: 'Minimum items' }, { key: 'requiredFields', label: 'Required fields (comma-separated)' }, { key: 'uniqueBy', label: 'Unique field' }, { key: 'dropIncomplete', label: 'Drop incomplete records (true/false)' }, { key: 'outputLimit', label: 'Final record limit' }],
 };
 
 const mapActionsToGraph = (actions: any[], prompt: string) => {
@@ -389,12 +420,16 @@ export function CockpitInner() {
   // Custom run modal state
   const [runWorkflowId, setRunWorkflowId] = useState<string | null>(null);
   const [customStartUrl, setCustomStartUrl] = useState('');
+  const [runInput, setRunInput] = useState<Record<string, unknown>>({});
+  const [runInputErrors, setRunInputErrors] = useState<Record<string, string>>({});
 
   // Logs modal state
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [pollingLogs, setPollingLogs] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const MAX_AUTO_RETRIES = 3;
+  // Cloud submissions happen once. Safe retries belong to the server, where
+  // node semantics, idempotency, and checkpoints are available.
+  const MAX_AUTO_RETRIES = 1;
   // Workflow queued for re-launch (for Retry button)
   const [pendingRetryWorkflowId, setPendingRetryWorkflowId] = useState<string | null>(null);
 
@@ -411,6 +446,7 @@ export function CockpitInner() {
   const [showTriggers, setShowTriggers] = useState(false);
   const [showPlatform, setShowPlatform] = useState(false);
   const [uploadingArtifact, setUploadingArtifact] = useState(false);
+  const [nativeIntegrationOperations, setNativeIntegrationOperations] = useState<NativeIntegrationOperation[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { id: '1', role: 'stanley', content: 'Hi! I\'m Stanley, your automation copilot. Tell me what you want to automate, or ask me to add/edit steps in your flow!' }
@@ -426,115 +462,14 @@ export function CockpitInner() {
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [recordingNodeId, setRecordingNodeId] = useState<string | null>(null);
 
-  const [extensionActive, setExtensionActive] = useState(false);
-  const [nativeRunning, setNativeRunning] = useState(false);
-
-  const nativeRunLogsRef = useRef<string[]>([]);
-  const nativeRunStartTimeRef = useRef<number>(0);
-  const nativeRunIdRef = useRef<string>('');
-  const selectedWorkflowRef = useRef(selectedWorkflow);
 
   // Only the optional desktop recorder daemon still uses this. All workflow/run
   // CRUD and headless execution go through Firestore + the Cloud Run runner.
   const API_URL = 'http://localhost:3001/api';
 
   useEffect(() => {
-    selectedWorkflowRef.current = selectedWorkflow;
-  }, [selectedWorkflow]);
-
-  useEffect(() => {
     fetchWorkflowsAndRuns();
-  }, []);
-
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      if (e.source !== window || !e.data || e.data.ns !== 'stanley-extension') return;
-      if (e.data.cmd === 'ping_response') {
-        setExtensionActive(true);
-      } else if (e.data.cmd === 'workflow_event') {
-        const { action, log, error, result, reqId, prompt, context } = e.data;
-        if (action === 'run_ai_prompt') {
-          runAiAnalysis(prompt, context)
-            .then(aiResult => {
-              window.postMessage({ ns: 'stanley-web', cmd: 'ai_prompt_response', reqId, result: aiResult }, '*');
-            })
-            .catch(err => {
-              window.postMessage({ ns: 'stanley-web', cmd: 'ai_prompt_response', reqId, result: `AI Error: ${err.message}` }, '*');
-            });
-        } else if (action === 'native_log') {
-          setActiveRun(prev => {
-            if (!prev) return null;
-            const updatedLogs = [...(prev.logs || []), log];
-            nativeRunLogsRef.current = updatedLogs;
-            return { ...prev, logs: updatedLogs };
-          });
-        } else if (action === 'native_complete') {
-          setNativeRunning(false);
-          setActiveRun(prev => {
-            if (!prev) return null;
-            const updatedLogs = [...(prev.logs || []), '[System] Native run completed successfully ✅'];
-            nativeRunLogsRef.current = updatedLogs;
-            
-            const runDuration = `${Math.round((Date.now() - nativeRunStartTimeRef.current) / 1000)}s`;
-            const finalRun = {
-              id: nativeRunIdRef.current,
-              workflowId: selectedWorkflowRef.current?.id || prev.workflowId,
-              workflowName: selectedWorkflowRef.current?.name || prev.workflowName,
-              status: 'Success',
-              trigger: 'Browser Extension',
-              duration: runDuration,
-              timestamp: new Date().toLocaleString(),
-              logs: updatedLogs,
-              scraped: result || {}
-            };
-            
-            setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
-              .then(() => fetchWorkflowsAndRuns())
-              .catch(err => console.error('Failed to save native run:', err));
-
-            return { ...prev, status: 'Success', logs: updatedLogs };
-          });
-        } else if (action === 'native_failed') {
-          setNativeRunning(false);
-          setActiveRun(prev => {
-            if (!prev) return null;
-            const updatedLogs = [...(prev.logs || []), `[System] Native run failed ❌: ${error}`];
-            nativeRunLogsRef.current = updatedLogs;
-
-            const runDuration = `${Math.round((Date.now() - nativeRunStartTimeRef.current) / 1000)}s`;
-            const finalRun = {
-              id: nativeRunIdRef.current,
-              workflowId: selectedWorkflowRef.current?.id || prev.workflowId,
-              workflowName: selectedWorkflowRef.current?.name || prev.workflowName,
-              status: 'Failed',
-              trigger: 'Browser Extension',
-              duration: runDuration,
-              timestamp: new Date().toLocaleString(),
-              logs: updatedLogs
-            };
-
-            setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
-              .then(() => fetchWorkflowsAndRuns())
-              .catch(err => console.error('Failed to save native run:', err));
-
-            return { ...prev, status: 'Failed', logs: updatedLogs };
-          });
-        }
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-
-    window.postMessage({ ns: 'stanley-web', cmd: 'ping' }, '*');
-
-    const pingInterval = setInterval(() => {
-      window.postMessage({ ns: 'stanley-web', cmd: 'ping' }, '*');
-    }, 3000);
-
-    return () => {
-      window.removeEventListener('message', handleMessage);
-      clearInterval(pingInterval);
-    };
+    void listNativeIntegrationOperations().then(setNativeIntegrationOperations).catch((error) => console.warn('Native integration metadata unavailable:', error));
   }, []);
 
   const fetchWorkflowsAndRuns = async () => {
@@ -545,7 +480,11 @@ export function CockpitInner() {
         listDocs('runs').catch(() => []),
         listDocs('vault').catch(() => []),
       ]);
-      setWorkflows(wfs as unknown as Workflow[]);
+      const normalizedWorkflows = (wfs as unknown as Workflow[]).map(ensureWorkflowMission);
+      setWorkflows(normalizedWorkflows);
+      const requestedWorkflowId = new URLSearchParams(window.location.search).get('id');
+      const requestedWorkflow = requestedWorkflowId ? normalizedWorkflows.find((workflow) => workflow.id === requestedWorkflowId) : null;
+      if (requestedWorkflow && selectedWorkflow?.id !== requestedWorkflow.id) loadWorkflowInEditor(requestedWorkflow);
       setRuns(runData as unknown as any[]);
       const lmSecret = vaultItems.find(
         (s: any) => typeof s.name === 'string' &&
@@ -567,6 +506,7 @@ export function CockpitInner() {
   }, [setNodes, setEdges]);
 
   const loadWorkflowInEditor = (wf: Workflow) => {
+    wf = ensureWorkflowMission(wf);
     setSelectedWorkflow(wf);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
@@ -868,9 +808,10 @@ export function CockpitInner() {
       id: Math.random().toString(36).substring(2, 9),
       name: `Untitled Automation ${workflows.length + 1}`,
       nodes: [
+        { id: 'mission-1', type: 'mission', label: 'Mission', data: { prompt: 'Describe the outcome this automation should reliably achieve.' }, position: { x: 30, y: 30 } },
         { id: '1', type: 'trigger', label: 'Start Trigger', data: { url: 'https://' }, position: { x: 250, y: 60 } }
       ],
-      edges: []
+      edges: [{ source: 'mission-1', target: '1', kind: 'context' }]
     };
 
     try {
@@ -974,6 +915,8 @@ export function CockpitInner() {
 
   const handleOpenRunModal = (wf: Workflow) => {
     setRunWorkflowId(wf.id);
+    setRunInput(schemaDefaults(wf.inputSchema));
+    setRunInputErrors({});
     const triggerNode = wf.nodes.find(n => n.type === 'trigger');
     setCustomStartUrl(triggerNode?.data?.url || 'https://');
   };
@@ -984,13 +927,21 @@ export function CockpitInner() {
     if (!runWorkflowId) return;
     const wf = workflows.find(w => w.id === runWorkflowId);
     if (!wf) return;
+    const errors = validateSchemaInput(wf.inputSchema, runInput);
+    if (Object.keys(errors).length) { setRunInputErrors(errors); return; }
+    let runnable = wf;
+    if (!Object.keys(wf.inputSchema?.properties || {}).length) {
+      const nodes = wf.nodes.map((node) => node.type === 'trigger' ? { ...node, data: { ...node.data, url: customStartUrl } } : node);
+      runnable = { ...wf, nodes };
+      await setDoc('workflows', wf.id, runnable as unknown as Record<string, unknown>);
+      setWorkflows((current) => current.map((item) => item.id === wf.id ? runnable : item));
+    }
     setRunWorkflowId(null);
-    await executeCloudRun(wf, customStartUrl);
+    await executeCloudRun(runnable, normalizeSchemaInput(wf.inputSchema, runInput));
   };
 
-  // Drives a full synchronous cloud run with inline auto-retry, then persists the
-  // finished run to Firestore. Shared by the Run modal and the manual Retry button.
-  const executeCloudRun = async (wf: Workflow, startUrl: string) => {
+  // Submits one server-owned cloud run, then persists the returned summary.
+  const executeCloudRun = async (wf: Workflow, input: Record<string, unknown> = {}) => {
     const runId = Math.random().toString(36).substring(2, 9);
     const startTime = Date.now();
 
@@ -1008,144 +959,50 @@ export function CockpitInner() {
       logs: ['[System] Sending workflow to the cloud runner…']
     });
 
-    // Apply the custom start URL to the trigger node, and resolve vault secrets.
-    const secrets = await fetchSecretsMap();
-    const compiledWf = JSON.parse(JSON.stringify(wf));
-    const triggerNode = compiledWf.nodes.find((n: any) => n.type === 'trigger');
-    if (triggerNode && triggerNode.data) triggerNode.data.url = startUrl;
-
     let finalRun: Run | null = null;
-    let transportError = false;
 
-    for (let attempt = 0; attempt < MAX_AUTO_RETRIES; attempt++) {
-      if (attempt > 0) {
-        setActiveRun(prev => prev ? {
-          ...prev,
-          status: 'Running',
-          logs: [...(prev.logs || []), `[System] Auto-retry ${attempt}/${MAX_AUTO_RETRIES - 1}…`]
-        } : prev);
-      }
-
-      try {
-        const result = await runHeadless(compiledWf, secrets);
-        const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
-        const logs = (result.logs && result.logs.length)
-          ? [...result.logs]
-          : [result.success ? '[System] Completed.' : '[System] Run failed.'];
-        if (!result.success && result.error) logs.push(`[System] ❌ ${result.error}`);
-
-        finalRun = {
-          id: runId,
-          workflowId: wf.id,
-          workflowName: wf.name,
-          status: result.success ? 'Success' : 'Failed',
-          trigger: 'Cloud Headless',
-          duration,
-          timestamp: new Date().toLocaleString(),
-          logs,
-        };
-        setActiveRun(finalRun);
-        if (result.success) break;        // retry only on run-level failure
-      } catch (err: any) {
-        // Transport/auth/config failure — don't hammer the runner in a loop.
-        const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
-        finalRun = {
-          id: runId,
-          workflowId: wf.id,
-          workflowName: wf.name,
-          status: 'Failed',
-          trigger: 'Cloud Headless',
-          duration,
-          timestamp: new Date().toLocaleString(),
-          logs: [`[System] ❌ ${err.message}`],
-        };
-        setActiveRun(finalRun);
-        transportError = true;
-        break;
-      }
+    try {
+      const result = await runHeadless(wf, input);
+      const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
+      const logs = (result.logs && result.logs.length)
+        ? [...result.logs]
+        : [result.success ? '[System] Completed.' : '[System] Run failed.'];
+      if (!result.success && result.error) logs.push(`[System] ❌ ${result.error}`);
+      finalRun = {
+        id: result.runId || runId,
+        workflowId: wf.id,
+        workflowName: wf.name,
+        status: result.success ? 'Success' : result.paused ? (result.status === 'pending_approval' ? 'Pending Approval' : 'Waiting') : 'Failed',
+        cloudState: result.status,
+        waitType: result.wait?.type,
+        trigger: 'Cloud Headless',
+        duration,
+        timestamp: new Date().toLocaleString(),
+        logs,
+      };
+    } catch (err: any) {
+      finalRun = {
+        id: runId,
+        workflowId: wf.id,
+        workflowName: wf.name,
+        status: 'Failed',
+        trigger: 'Cloud Headless',
+        duration: `${Math.round((Date.now() - startTime) / 1000)}s`,
+        timestamp: new Date().toLocaleString(),
+        logs: [`[System] ❌ ${err.message}`],
+      };
     }
+    setActiveRun(finalRun);
 
     if (finalRun) {
       if (finalRun.status === 'Failed') {
-        // Surface the manual Retry button (skip for transport errors that won't self-heal).
-        setRetryCount(MAX_AUTO_RETRIES);
-        if (!transportError) setPendingRetryWorkflowId(wf.id);
+        setRetryCount(1);
+        setPendingRetryWorkflowId(wf.id);
       }
-      await setDoc('runs', finalRun.id, finalRun as unknown as Record<string, unknown>)
-        .catch(e => console.error('Failed to save run:', e));
       fetchWorkflowsAndRuns();
     }
 
     setPollingLogs(false);
-  };
-
-  const fetchSecretsMap = async (): Promise<Record<string, string>> => {
-    try {
-      const secretsList = await listDocs('vault');
-      const secretsMap: Record<string, string> = {};
-      secretsList.forEach((s: any) => {
-        secretsMap[s.id] = s.value;
-        secretsMap[s.name] = s.value;
-        // Login Credentials expose username/email + password as dotted sub-keys,
-        // so a login flow can reference vault:Name.username / vault:Name.password.
-        if (s.username != null) {
-          secretsMap[`${s.id}.username`] = s.username;
-          secretsMap[`${s.name}.username`] = s.username;
-          secretsMap[`${s.id}.email`] = s.username;
-          secretsMap[`${s.name}.email`] = s.username;
-        }
-        if (s.password != null) {
-          secretsMap[`${s.id}.password`] = s.password;
-          secretsMap[`${s.name}.password`] = s.password;
-        }
-      });
-      return secretsMap;
-    } catch (err) {
-      console.error('Error fetching vault credentials:', err);
-    }
-    return {};
-  };
-
-  const handleRunWorkflowInBrowser = async () => {
-    if (!runWorkflowId) return;
-    const wf = workflows.find(w => w.id === runWorkflowId);
-    if (!wf) return;
-
-    setRunWorkflowId(null);
-    setNativeRunning(true);
-    
-    const runId = Math.random().toString(36).substring(2, 9);
-    nativeRunIdRef.current = runId;
-    nativeRunStartTimeRef.current = Date.now();
-    nativeRunLogsRef.current = ['[System] Connecting to browser extension engine...'];
-
-    const mockRun: Run = {
-      id: runId,
-      workflowId: wf.id,
-      workflowName: wf.name,
-      status: 'Running',
-      trigger: 'Browser Extension',
-      duration: '0s',
-      timestamp: new Date().toLocaleString(),
-      logs: nativeRunLogsRef.current
-    };
-    setActiveRun(mockRun);
-
-    const secrets = await fetchSecretsMap();
-
-    // Compile workflow nodes and edges
-    const compiledWf = JSON.parse(JSON.stringify(wf));
-    const triggerNode = compiledWf.nodes.find((n: any) => n.type === 'trigger');
-    if (triggerNode && triggerNode.data) {
-      triggerNode.data.url = customStartUrl;
-    }
-
-    window.postMessage({
-      ns: 'stanley-web',
-      cmd: 'run_native_workflow',
-      workflow: compiledWf,
-      secrets: secrets
-    }, '*');
   };
 
   const handleCloseLogs = () => {
@@ -1155,27 +1012,40 @@ export function CockpitInner() {
     setPendingRetryWorkflowId(null);
   };
 
-  const handleCancelRun = () => {
-    if (nativeRunning) {
-      window.postMessage({ ns: 'stanley-web', cmd: 'cancel_native' }, '*');
-      setNativeRunning(false);
-      setActiveRun(prev => prev ? {
-        ...prev,
-        status: 'Failed',
-        logs: [...(prev.logs || []), '[System] Native run cancellation requested.']
+  const handleCancelRun = async () => {
+    if (activeRun?.id && ['Running', 'Pending Approval', 'Waiting'].includes(activeRun.status)) {
+      setPollingLogs(true);
+      try {
+        const result = await cancelHeadlessRun(activeRun.id);
+        setActiveRun((current) => current ? { ...current, status: 'Cancelled', cloudState: result.status, logs: result.logs } : null);
+      } catch (error: any) {
+        setActiveRun((current) => current ? { ...current, logs: [...(current.logs || []), `[System] ${error.message}`] } : null);
+      } finally { setPollingLogs(false); }
+    } else handleCloseLogs();
+  };
+
+  const handleRunDecision = async (decision: 'approve' | 'reject') => {
+    if (!activeRun?.id) return;
+    setPollingLogs(true);
+    try {
+      const result = await decideHeadlessRun(activeRun.id, decision);
+      setActiveRun((current) => current ? {
+        ...current,
+        status: result.success ? 'Success' : result.paused ? (result.status === 'pending_approval' ? 'Pending Approval' : 'Waiting') : decision === 'reject' ? 'Rejected' : 'Failed',
+        cloudState: result.status,
+        waitType: result.wait?.type,
+        logs: result.logs,
       } : null);
-      setPendingRetryWorkflowId(null);
-    } else {
-      handleCloseLogs();
-    }
+    } catch (error: any) {
+      setActiveRun((current) => current ? { ...current, logs: [...(current.logs || []), `[System] ${error.message}`] } : null);
+    } finally { setPollingLogs(false); fetchWorkflowsAndRuns(); }
   };
 
   const handleManualRetry = async () => {
     if (!pendingRetryWorkflowId) return;
     const wf = workflows.find(w => w.id === pendingRetryWorkflowId);
     if (!wf) return;
-    const triggerNode = wf.nodes.find(n => n.type === 'trigger');
-    await executeCloudRun(wf, triggerNode?.data?.url || customStartUrl || 'https://');
+    await executeCloudRun(wf, normalizeSchemaInput(wf.inputSchema, runInput));
   };
 
   const handleDeleteWorkflow = async (id: string, name: string) => {
@@ -1360,7 +1230,10 @@ export function CockpitInner() {
     else if (type === 'extract_list') nodeData = { selector: '', schema: '[\n  {\n    "name": "string",\n    "price": "string"\n  }\n]' };
     else if (type === 'paginate') nodeData = { selector: '', description: '', maxPages: '3', actionNodeId: '' };
     else if (type === 'agent') nodeData = { goal: '', maxSteps: '8' };
-    else if (type === 'integration') nodeData = { integrationName: 'gmail_list_messages', query: '' };
+    else if (type === 'integration') nodeData = {
+      integrationName: 'gmail_list_messages',
+      params: '{\n  "connection": {},\n  "path": {},\n  "query": {},\n  "body": {}\n}',
+    };
     else if (type === 'scroll') nodeData = { amount: '700', selector: '' };
     else if (type === 'find_text') nodeData = { text: '' };
     else if (type === 'send_keys') nodeData = { keys: 'Enter' };
@@ -1370,6 +1243,11 @@ export function CockpitInner() {
     else if (type === 'upload_file') nodeData = { artifactId: '', selector: 'input[type="file"]' };
     else if (type === 'download_file') nodeData = { selector: '', description: '' };
     else if (type === 'mcp_tool') nodeData = { serverUrl: 'https://', toolName: '', vaultKey: '' };
+    else if (type === 'scroll_until') nodeData = { containerSelector: '', itemSelector: '', uniqueByAttribute: 'href', targetCount: '25', maxScrolls: '30', settleMs: '1200' };
+    else if (type === 'dom_extract_list') nodeData = { itemSelector: '', fields: '{"title":{"attribute":"text"},"url":{"attribute":"href"}}', dedupeBy: 'url', maxItems: '100' };
+    else if (type === 'visit_each') nodeData = { sourceNodeId: '', urlField: 'url', fields: '{"title":{"selector":"h1","attribute":"text"}}', maxItems: '50', settleMs: '1200' };
+    else if (type === 'filter_list') nodeData = { sourceNodeId: '', criteria: '', schema: '[{"title":"string","url":"string"}]' };
+    else if (type === 'assertion') nodeData = { sourceNodeId: '', minItems: '1', requiredFields: 'title,url', uniqueBy: 'url', dropIncomplete: 'true', outputLimit: '' };
     else nodeData = { selector: '' };
 
     const labelMap: Record<string, string> = {
@@ -1395,7 +1273,7 @@ export function CockpitInner() {
       paginate: 'Paginate Scrape',
       agent: 'Agent Mode',
       integration: 'API Integration'
-      , scroll: 'Scroll Page', find_text: 'Find Text', go_back: 'Browser Back', go_forward: 'Browser Forward', send_keys: 'Send Keys', select_dropdown: 'Select Dropdown', hover: 'Hover Element', drag_drop: 'Drag & Drop', upload_file: 'Upload Artifact', download_file: 'Download Artifact', mcp_tool: 'MCP Tool'
+      , scroll: 'Scroll Page', scroll_until: 'Load Dynamic Feed', dom_extract_list: 'Capture DOM List', visit_each: 'Enrich Each Result', filter_list: 'AI Filter List', assertion: 'Verify Result Contract', find_text: 'Find Text', go_back: 'Browser Back', go_forward: 'Browser Forward', send_keys: 'Send Keys', select_dropdown: 'Select Dropdown', hover: 'Hover Element', drag_drop: 'Drag & Drop', upload_file: 'Upload Artifact', download_file: 'Download Artifact', mcp_tool: 'MCP Tool'
     };
 
     const newNode: MyRFNode = {
@@ -1691,7 +1569,6 @@ export function CockpitInner() {
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.45)' }} onClick={() => addNode('mission')}><Target size={12}/> Mission</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.45)' }} onClick={() => addNode('parameter')}><Tag size={12}/> Parameter</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('navigate')}><Globe size={12}/> Navigate</button>
-                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)' }} onClick={() => addNode('record')}><Circle size={12} className="text-accent-danger" fill="#ef4444"/> Record Steps</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('click')}><Plus size={12}/> Click</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('type')}><Type size={12}/> Type</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('scrape')}><Database size={12}/> Scrape</button>
@@ -1699,17 +1576,14 @@ export function CockpitInner() {
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('switch_tab')}><RefreshCw size={12}/> Switch Tab</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('close_tab')}><X size={12}/> Close Tab</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('if')}><GitFork size={12}/> If Branch</button>
-                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('goto')}><ArrowRight size={12}/> Goto</button>
-                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('label')}><Bookmark size={12}/> Label</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode('wait')}><Clock size={12}/> Wait</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.4)' }} onClick={() => addNode('ai_prompt')}><Sparkles size={12}/> AI Prompt</button>
-                  <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)' }} onClick={() => addNode('js_code')}><Code size={12}/> JS Script</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.4)' }} onClick={() => addNode('extract')}><Database size={12}/> Extract</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(5, 150, 105, 0.15)', border: '1px solid rgba(5, 150, 105, 0.4)' }} onClick={() => addNode('extract_list')}><Database size={12}/> Extract List</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)' }} onClick={() => addNode('paginate')}><RefreshCw size={12}/> Paginate</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.4)' }} onClick={() => addNode('agent')}><Sparkles size={12}/> Agent</button>
                   <button className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0, background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)' }} onClick={() => addNode('integration')}><Globe size={12}/> Integration</button>
-                  {['scroll','find_text','go_back','go_forward','send_keys','select_dropdown','hover','drag_drop','upload_file','download_file','mcp_tool'].map((type) => <button key={type} className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode(type)}><Blocks size={12}/>{type.replaceAll('_',' ')}</button>)}
+                  {['scroll','scroll_until','dom_extract_list','visit_each','filter_list','assertion','find_text','go_back','go_forward','send_keys','select_dropdown','hover','drag_drop','upload_file','download_file','mcp_tool'].map((type) => <button key={type} className="node-item btn-node" style={{ padding: '4px', fontSize: '0.75rem', marginBottom: 0 }} onClick={() => addNode(type)}><Blocks size={12}/>{type.replaceAll('_',' ')}</button>)}
                   </div>
                 </div>}
 
@@ -2230,7 +2104,11 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                             className="form-input select-workflow"
                             style={{ padding: '4px 8px', fontSize: '0.8rem', height: 'auto' }}
                             value={currentNode.data.data?.integrationName || 'gmail_list_messages'}
-                            onChange={(e) => updateNodeDataField('integrationName', e.target.value)}
+                            onChange={(e) => {
+                              const operation = nativeIntegrationOperations.find((item) => item.id === e.target.value);
+                              updateNodeDataField('integrationName', e.target.value);
+                              updateNodeDataField('params', emptyNativeIntegrationInput(operation));
+                            }}
                           >
                             {Object.entries(getIntegrationsByApp()).map(([app, items]) => (
                               <optgroup key={app} label={app}>
@@ -2242,17 +2120,28 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                               </optgroup>
                             ))}
                           </select>
+                          {(() => {
+                            const operation = nativeIntegrationOperations.find((item) => item.id === (currentNode.data.data?.integrationName || 'gmail_list_messages'));
+                            if (!operation) return null;
+                            const credentials = operation.requiredVaultRefs.join(', ');
+                            return <div style={{ marginTop: '3px', fontSize: '0.62rem', color: operation.readWrite === 'write' ? '#b45309' : 'var(--text-tertiary)' }}>
+                              {operation.method} · {operation.readWrite === 'write' ? 'Write operation — approval required' : 'Read-only'}{credentials ? ` · Vault: ${credentials}` : ''}
+                            </div>;
+                          })()}
                         </div>
-                        <div style={{ flex: 2, minWidth: '200px' }}>
-                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Search Query (optional)</label>
-                          <input 
-                            type="text" 
+                        <div style={{ flex: 3, minWidth: '300px' }}>
+                          <label style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>Operation Parameters (JSON)</label>
+                          <textarea
                             className="form-input" 
-                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                            placeholder="e.g. from:billing"
-                            value={currentNode.data.data?.query || ''} 
-                            onChange={(e) => updateNodeDataField('query', e.target.value)} 
+                            style={{ padding: '4px 8px', fontSize: '0.75rem', minHeight: '74px', fontFamily: 'monospace', resize: 'vertical' }}
+                            spellCheck={false}
+                            placeholder={'{"connection":{},"path":{},"query":{},"body":{}}'}
+                            value={currentNode.data.data?.params || '{\n  "connection": {},\n  "path": {},\n  "query": {},\n  "body": {}\n}'}
+                            onChange={(e) => updateNodeDataField('params', e.target.value)}
                           />
+                          <div style={{ marginTop: '3px', fontSize: '0.62rem', color: 'var(--text-tertiary)' }}>
+                            Use path values for URL placeholders, query for filters, body for payloads, and connection for tenant-specific hosts.
+                          </div>
                         </div>
                       </>
                     )}
@@ -2455,9 +2344,9 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                   </button>
                   <button
                     className="suggestion-chip"
-                    onClick={() => handleSendChatMessage('Write a JS script to scrape article links')}
+                    onClick={() => handleSendChatMessage('Add an Extract List node for article titles and links')}
                   >
-                    💻 Scrape JS Script
+                    📚 Extract Article Links
                   </button>
                 </>
               )}
@@ -2506,28 +2395,21 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
         <div className="modal-overlay">
           <div className="modal-content glass-panel">
             <h2>Trigger Automation</h2>
-            <div className="form-group">
-              <label>Enter Starting URL for this Run</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={customStartUrl} 
-                onChange={(e) => setCustomStartUrl(e.target.value)} 
-                placeholder="https://..." 
-                required
+            {Object.keys(workflows.find((workflow) => workflow.id === runWorkflowId)?.inputSchema?.properties || {}).length ? (
+              <SchemaInputForm
+                schema={workflows.find((workflow) => workflow.id === runWorkflowId)?.inputSchema}
+                value={runInput}
+                errors={runInputErrors}
+                onChange={(value) => { setRunInput(value); setRunInputErrors({}); }}
               />
-            </div>
+            ) : (
+              <div className="form-group">
+                <label>Starting URL</label>
+                <input type="url" className="form-input" value={customStartUrl} onChange={(e) => setCustomStartUrl(e.target.value)} placeholder="https://..." required />
+              </div>
+            )}
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setRunWorkflowId(null)}>Cancel</button>
-              {extensionActive && (
-                <button
-                  className="btn btn-primary"
-                  style={{ background: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)', borderColor: 'transparent', boxShadow: '0 0 10px rgba(168, 85, 247, 0.4)' }}
-                  onClick={handleRunWorkflowInBrowser}
-                >
-                  <Play size={14} style={{ display: 'inline', marginRight: '4px' }}/> Run in Browser
-                </button>
-              )}
               <button
                 className="btn btn-primary"
                 onClick={handleRunWorkflow}
@@ -2596,19 +2478,18 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
               {pollingLogs && (
                 <div className="log-line active-polling">
                   <Loader className="spinner inline"/> Running...
-                  {retryCount > 0 && ` (auto-retry ${retryCount}/${MAX_AUTO_RETRIES})`}
                 </div>
               )}
-              {/* Terminal failure state — max retries exhausted */}
+              {/* Terminal failure state after one server-owned submission. */}
               {activeRun.status === 'Failed' && !pollingLogs && retryCount >= MAX_AUTO_RETRIES && (
                 <div className="log-line" style={{ color: 'var(--error)', marginTop: '0.5rem', fontWeight: 600 }}>
-                  ⚠️ Workflow failed after {MAX_AUTO_RETRIES} attempts.
+                  ⚠️ Workflow failed. Review the run details before retrying.
                 </div>
               )}
             </div>
 
             <div className="modal-actions">
-              {nativeRunning && (
+              {['Running', 'Pending Approval', 'Waiting'].includes(activeRun.status) && (
                 <button
                   className="btn btn-secondary"
                   style={{ borderColor: 'var(--error)', color: 'var(--error)' }}
@@ -2617,7 +2498,13 @@ return await context.ai.prompt({ prompt: "Summarize: " + text });`}
                   Cancel Run
                 </button>
               )}
-              {/* Manual Retry button — shown only after all auto-retries are exhausted */}
+              {(activeRun.status === 'Pending Approval' || (activeRun.status === 'Waiting' && activeRun.waitType === 'approval')) && (
+                <>
+                  <button className="btn btn-secondary" style={{ borderColor: 'var(--error)', color: 'var(--error)' }} onClick={() => handleRunDecision('reject')}>Reject</button>
+                  <button className="btn btn-primary" onClick={() => handleRunDecision('approve')}>Approve &amp; Continue</button>
+                </>
+              )}
+              {/* Manual retry remains an explicit operator decision. */}
               {activeRun.status === 'Failed' && !pollingLogs && retryCount >= MAX_AUTO_RETRIES && pendingRetryWorkflowId && (
                 <button className="btn btn-secondary" onClick={handleManualRetry}>
                   <RefreshCw size={14} style={{ display: 'inline', marginRight: '4px' }}/> Retry

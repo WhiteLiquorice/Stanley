@@ -2,7 +2,7 @@
  * firebaseAuth.ts — real Firebase auth for the web dashboard.
  *
  * Replaces the hardcoded reviewer credentials that were baked into Landing.tsx.
- * Uses the same Firebase project + license model as the Chrome extension
+ * Uses Stanley's Firebase project and subscription model.
  * (Identity Toolkit for sign-in, Firestore `stanley_users/{uid}` for license
  * status), via REST so no SDK dependency is needed.
  *
@@ -18,13 +18,54 @@ export interface SignInResult {
   error?: string;
 }
 
+function isLocalDevelopment() {
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+}
+
+function profileUrl(uid: string) {
+  return `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/stanley_users/${uid}`;
+}
+
+async function createFreeProfile(uid: string, email: string, idToken: string): Promise<void> {
+  const now = new Date().toISOString();
+  const response = await fetch(`${profileUrl(uid)}?currentDocument.exists=false`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: {
+      email: { stringValue: email.trim().toLowerCase() },
+      status: { stringValue: 'free' },
+      paid: { booleanValue: false },
+      runs_used: { integerValue: '0' },
+      runs_reserved: { integerValue: '0' },
+      createdAt: { timestampValue: now },
+      updatedAt: { timestampValue: now },
+    } }),
+  });
+  if (!response.ok && ![409, 412].includes(response.status)) throw new Error('Could not initialize the Stanley account profile.');
+}
+
+async function loadOrCreateProfile(uid: string, email: string, idToken: string) {
+  let response = await fetch(profileUrl(uid), { headers: { Authorization: `Bearer ${idToken}` } });
+  if (response.status === 404) {
+    await createFreeProfile(uid, email, idToken);
+    response = await fetch(profileUrl(uid), { headers: { Authorization: `Bearer ${idToken}` } });
+  }
+  if (!response.ok) throw new Error('Could not load the Stanley account profile.');
+  const profile = await response.json();
+  return {
+    status: profile?.fields?.status?.stringValue || 'free',
+    paid: Boolean(profile?.fields?.paid?.booleanValue),
+    runsUsed: parseInt(profile?.fields?.runs_used?.integerValue || '0', 10),
+  };
+}
+
 export async function signIn(email: string, password: string): Promise<SignInResult> {
   try {
     let uid = 'mock-uid-' + Math.random().toString(36).substring(2, 9);
     let idToken = 'mock-id-token-' + Math.random().toString(36).substring(2, 9);
     let refreshToken = 'mock-refresh-token';
     let expiresInSec = 3600;
-    let status = 'active';
+    let status = 'free';
 
     try {
       let authRes = await fetch(
@@ -40,32 +81,8 @@ export async function signIn(email: string, password: string): Promise<SignInRes
         const errData = await authRes.json().catch(() => ({}));
         const code = errData?.error?.message || '';
 
-        // If the email is not registered, or if the login credentials fail in general,
-        // we automatically try to sign them up to create the account.
-        if (code === 'EMAIL_NOT_FOUND' || code.includes('INVALID_LOGIN_CREDENTIALS') || code === 'INVALID_PASSWORD') {
-          const signUpRes = await fetch(
-            `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email, password, returnSecureToken: true }),
-            }
-          );
-          if (signUpRes.ok) {
-            authRes = signUpRes;
-          } else {
-            console.warn('Firebase signup also failed, falling back to mock login');
-          }
-        }
-
         if (!authRes.ok) {
-          if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            let errorMsg = 'Incorrect email or password.';
-            if (code === 'INVALID_EMAIL') {
-              errorMsg = 'Invalid email address format.';
-            }
-            return { ok: false, error: errorMsg };
-          }
+          if (!isLocalDevelopment()) return { ok: false, error: code === 'INVALID_EMAIL' ? 'Invalid email address format.' : 'Incorrect email or password.' };
         }
       }
 
@@ -76,27 +93,13 @@ export async function signIn(email: string, password: string): Promise<SignInRes
         refreshToken = authData.refreshToken as string;
         expiresInSec = parseInt(authData.expiresIn || '3600', 10);
         
-        // Try checking license, but do not block if it's inactive or missing in firestore
-        try {
-          const dbRes = await fetch(
-            `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/stanley_users/${uid}`,
-            { headers: { Authorization: `Bearer ${idToken}` } }
-          );
-          if (dbRes.ok) {
-            const dbData = await dbRes.json();
-            status = dbData?.fields?.status?.stringValue || 'free';
-            const runsUsed = parseInt(dbData?.fields?.runs_used?.integerValue || '0', 10);
-            localStorage.setItem('stanley_runs_used', String(runsUsed));
-          } else if (dbRes.status === 404) {
-            status = 'free';
-            localStorage.setItem('stanley_runs_used', '0');
-          }
-        } catch (dbErr) {
-          console.warn('Firestore database check failed, using active license:', dbErr);
-        }
+        const profile = await loadOrCreateProfile(uid, email, idToken);
+        status = profile.paid ? 'active' : profile.status;
+        localStorage.setItem('stanley_runs_used', String(profile.runsUsed));
       }
     } catch (netErr) {
-      console.warn('Network issue during Firebase auth, using local mock auth:', netErr);
+      if (!isLocalDevelopment()) return { ok: false, error: 'Network error. Please check your connection and try again.' };
+      console.warn('Network issue during local development; using a local-only mock session:', netErr);
     }
 
     // Persist session to allow access to /dashboard routes
@@ -106,18 +109,19 @@ export async function signIn(email: string, password: string): Promise<SignInRes
     localStorage.setItem('stanley_id_token', idToken);
     localStorage.setItem('stanley_refresh_token', refreshToken);
     localStorage.setItem('stanley_token_expires_at', String(Date.now() + expiresInSec * 1000));
-    localStorage.setItem('stanley_status', status); // Use variable status to bypass warning
+    localStorage.setItem('stanley_status', status);
 
     return { ok: true };
   } catch (err) {
-    console.warn('Authentication error caught, falling back to local mock session:', err);
+    if (!isLocalDevelopment()) return { ok: false, error: err instanceof Error ? err.message : 'Authentication failed.' };
+    console.warn('Authentication error caught during local development:', err);
     localStorage.setItem('stanley_logged_in', 'true');
     localStorage.setItem('stanley_uid', 'local-admin-uid');
     localStorage.setItem('stanley_email', email || 'admin@projectstanley.com');
     localStorage.setItem('stanley_id_token', 'local-mock-token');
     localStorage.setItem('stanley_refresh_token', 'mock-refresh-token');
     localStorage.setItem('stanley_token_expires_at', String(Date.now() + 3600 * 1000));
-    localStorage.setItem('stanley_status', 'active');
+    localStorage.setItem('stanley_status', 'free');
     return { ok: true };
   }
 }
@@ -153,6 +157,8 @@ export async function signUp(email: string, password: string): Promise<SignInRes
     const uid = authData.localId as string;
     const idToken = authData.idToken as string;
     const expiresInSec = parseInt(authData.expiresIn || '3600', 10);
+
+    await createFreeProfile(uid, email, idToken);
 
     localStorage.setItem('stanley_logged_in', 'true');
     localStorage.setItem('stanley_uid', uid);
@@ -224,6 +230,7 @@ export function signOut(): void {
     'stanley_refresh_token',
     'stanley_token_expires_at',
     'stanley_status',
+    'stanley_runs_used',
   ].forEach((k) => localStorage.removeItem(k));
 }
 

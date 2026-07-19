@@ -1,18 +1,21 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles, Plug, ShieldAlert, BrainCircuit } from 'lucide-react';
+import { Activity, KeyRound, Settings, Search, Bell, LogOut, CreditCard, BookOpen, Database, Plus, Zap, LayoutTemplate, Sparkles, Plug, ShieldAlert, BrainCircuit, Menu, X, ChevronDown, Wrench } from 'lucide-react';
 import { ExceptionNavBadge } from '../../GPT-Additions/website-overlay/ExceptionNavBadge';
 import { toast } from 'sonner';
 import { listDocs } from '../lib/firestore';
 import { CommandPalette } from './CommandPalette';
 import { getUsageStatus, FREE_RUN_LIMIT } from '../lib/usageLimit';
 import type { UsageStatus } from '../lib/usageLimit';
+import { mobileDestinations } from '../mobileNavigation';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(() => ['/dashboard/operations', '/dashboard/connectors', '/dashboard/vault', '/dashboard/guide', '/dashboard/settings'].some((path) => location.pathname.startsWith(path)));
   const [workflows, setWorkflows] = useState<Array<{ id: string; name: string }>>([]);
   const [usageStatus, setUsageStatus] = useState<UsageStatus>({ isPaid: false, runsUsed: 0, remaining: FREE_RUN_LIMIT });
   
@@ -74,21 +77,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
   };
 
 
-  const navItems = [
+  const primaryNavItems = [
     { name: 'Workspace', path: '/dashboard', icon: Sparkles },
     { name: 'Visual Flow', path: '/dashboard/canvas', icon: Activity },
     { name: 'Results', path: '/dashboard/results', icon: Database },
+    { name: 'Exceptions', path: '/dashboard/exceptions', icon: ShieldAlert },
+    { name: 'Templates', path: '/dashboard/templates', icon: LayoutTemplate },
+  ];
+  const advancedNavItems = [
     { name: 'Credential Vault', path: '/dashboard/vault', icon: KeyRound },
     { name: 'Operations', path: '/dashboard/operations', icon: BrainCircuit },
     { name: 'Connectors', path: '/dashboard/connectors', icon: Plug },
-    { name: 'Exceptions', path: '/dashboard/exceptions', icon: ShieldAlert },
     { name: 'Guide', path: '/dashboard/guide', icon: BookOpen },
-    { name: 'Templates', path: '/dashboard/templates', icon: LayoutTemplate },
     { name: 'Settings', path: '/dashboard/settings', icon: Settings },
   ];
+  const navItems = [...primaryNavItems, ...advancedNavItems];
+
+  const isMobileDestinationActive = (name: string, path: string) => {
+    if (name === 'Stanley') return location.pathname === '/dashboard';
+    if (name === 'Automations') return ['/dashboard/automations', '/dashboard/templates', '/dashboard/canvas', '/dashboard/editor', '/dashboard/connectors'].some((candidate) => location.pathname.startsWith(candidate));
+    if (name === 'Activity') return location.pathname.startsWith('/dashboard/results');
+    if (name === 'Inbox') return location.pathname.startsWith('/dashboard/exceptions');
+    if (name === 'You') return ['/dashboard/account', '/dashboard/vault', '/dashboard/operations', '/dashboard/guide', '/dashboard/settings'].some((candidate) => location.pathname.startsWith(candidate));
+    return location.pathname === path;
+  };
 
   return (
-    <div className="flex h-screen w-screen font-sans overflow-hidden select-none" style={{ background: 'var(--bg-deep)', color: 'var(--text-primary)' }}>
+    <div className="stanley-app-shell flex h-[100dvh] w-screen font-sans overflow-hidden select-none" style={{ background: 'var(--bg-deep)', color: 'var(--text-primary)' }}>
       
       {/* Sidebar */}
       <aside className="hidden md:flex w-[240px] border-r flex-col justify-between p-4 shrink-0 z-20" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
@@ -101,7 +116,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
           {/* Navigation */}
           <nav className="flex flex-col gap-1.5">
-            {navItems.map((item) => {
+            {primaryNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
               return (
@@ -121,6 +136,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </Link>
               );
             })}
+            <button type="button" onClick={() => setAdvancedOpen((open) => !open)} className="mt-2 flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-xs font-semibold transition hover:bg-[#EEF1F6]" style={{ color: 'var(--text-secondary)' }} aria-expanded={advancedOpen}>
+              <Wrench size={16} /><span className="flex-1 text-left">Advanced</span><ChevronDown size={14} className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {advancedOpen && <div className="ml-2 flex flex-col gap-1 border-l pl-2" style={{ borderColor: 'var(--border-strong)' }}>{advancedNavItems.map((item) => {
+              const Icon = item.icon; const isActive = location.pathname === item.path;
+              return <Link key={item.name} to={item.path} className="flex items-center gap-3 rounded-xl px-3 py-2 text-[11px] font-semibold transition hover:bg-[#EEF1F6]" style={isActive ? { background: 'rgba(108,71,255,0.09)', color: 'var(--accent)' } : { color: 'var(--text-secondary)' }}><Icon size={15} /><span>{item.name}</span></Link>;
+            })}</div>}
           </nav>
         </div>
         <div className="flex flex-col gap-4 border-t pt-4" style={{ borderColor: 'var(--border-strong)' }}>
@@ -186,8 +208,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 relative" style={{ background: 'var(--bg-deep)' }}>
-        <header className="h-16 border-b px-6 flex items-center justify-between backdrop-blur-md shrink-0 z-10" style={{ borderColor: 'var(--border-strong)', background: 'rgba(255,255,255,0.92)' }}>
-          <div className="relative w-96 cursor-pointer" onClick={() => setPaletteOpen(true)}>
+        <header className="stanley-topbar h-16 border-b px-4 sm:px-6 flex items-center justify-between backdrop-blur-md shrink-0 z-40" style={{ borderColor: 'var(--border-strong)', background: 'rgba(255,255,255,0.92)' }}>
+          <div className="md:hidden flex items-center gap-2.5 min-w-0">
+            <button type="button" onClick={() => setMobileMenuOpen(true)} className="mobile-icon-button" aria-label="Open all Stanley tools">
+              <Menu size={20} />
+            </button>
+            <button type="button" onClick={() => navigate('/dashboard')} className="flex items-center gap-2 min-w-0" aria-label="Open Stanley home">
+              <img src="/favicon.svg" alt="" className="w-7 h-7" />
+              <span className="font-bold text-sm text-slate-800 truncate">Stanley</span>
+            </button>
+          </div>
+
+          <div className="hidden md:block relative w-96 cursor-pointer" onClick={() => setPaletteOpen(true)}>
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text" 
@@ -198,7 +230,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ color: 'var(--text-tertiary)', border: '1px solid var(--border-strong)', background: 'var(--bg-surface)' }}>⌘K</span>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 sm:gap-4">
+            <button type="button" onClick={() => setPaletteOpen(true)} className="mobile-icon-button md:hidden" aria-label="Search Stanley">
+              <Search size={18} />
+            </button>
             {/* Interactive Notifications Bell */}
             <div className="relative">
               <button 
@@ -213,7 +248,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               
               {notificationsOpen && (
                 <div 
-                  className="absolute right-0 mt-2 w-80 bg-white border border-[#D1D7E4] rounded-2xl shadow-xl z-50 p-4 animate-fade-in text-left"
+                  className="fixed sm:absolute right-3 sm:right-0 left-3 sm:left-auto mt-2 sm:w-80 bg-white border border-[#D1D7E4] rounded-2xl shadow-xl z-50 p-4 animate-fade-in text-left"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 mb-2">
@@ -252,45 +287,65 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   window.dispatchEvent(new CustomEvent('reset-workspace'));
                 }
               }}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white transition-all cursor-pointer" style={{ background: 'var(--accent)', boxShadow: '0 2px 8px rgba(108,71,255,0.28)' }} onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-hover)')} onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent)')}
+              className="flex min-h-10 items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-xl text-xs font-bold text-white transition-all cursor-pointer" style={{ background: 'var(--accent)', boxShadow: '0 2px 8px rgba(108,71,255,0.28)' }} onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-hover)')} onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent)')}
             >
-              <Plus size={14} /> New Automation
+              <Plus size={15} /> <span className="hidden sm:inline">New Automation</span><span className="sm:hidden">New</span>
             </button>
           </div>
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
+        <main className="stanley-main flex-1 min-h-0 flex flex-col relative overflow-hidden">
           {children}
         </main>
 
         {/* Mobile Bottom Navigation */}
-        <nav className="md:hidden flex items-center justify-around border-t p-2 pb-safe shrink-0 z-50" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
-          {navItems.slice(0, 4).map((item) => {
+        <nav className="stanley-mobile-nav md:hidden flex items-stretch justify-around border-t shrink-0 z-50" aria-label="Primary mobile navigation" style={{ borderColor: 'var(--border-strong)', background: 'var(--bg-surface)' }}>
+          {mobileDestinations.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const isActive = isMobileDestinationActive(item.name, item.path);
             return (
               <Link
                 key={item.name}
                 to={item.path}
-                className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors"
+                className="mobile-nav-item flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-xl transition-colors"
                 style={{ color: isActive ? 'var(--accent)' : 'var(--text-tertiary)' }}
+                aria-current={isActive ? 'page' : undefined}
               >
-                <Icon size={20} />
+                <Icon size={19} strokeWidth={isActive ? 2.5 : 2} />
                 <span className="text-[9px] font-semibold">{item.name}</span>
               </Link>
             );
           })}
-          <Link
-            to="/dashboard/settings"
-            className="flex flex-col items-center gap-1 p-2 rounded-lg transition-colors"
-            style={{ color: location.pathname === '/dashboard/settings' ? 'var(--accent)' : 'var(--text-tertiary)' }}
-          >
-            <Settings size={20} />
-            <span className="text-[9px] font-semibold">Settings</span>
-          </Link>
         </nav>
       </div>
+
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 z-[80]" role="dialog" aria-modal="true" aria-label="All Stanley tools">
+          <button type="button" className="absolute inset-0 bg-slate-950/35 backdrop-blur-[2px]" onClick={() => setMobileMenuOpen(false)} aria-label="Close tools menu" />
+          <section className="absolute inset-y-0 left-0 w-[min(88vw,360px)] overflow-y-auto bg-white px-4 pb-8 shadow-2xl" style={{ paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
+            <div className="flex items-center justify-between px-2 pb-4">
+              <div className="flex items-center gap-2.5">
+                <img src="/favicon.svg" alt="" className="w-8 h-8" />
+                <div><p className="text-sm font-bold text-slate-900">Stanley</p><p className="text-[10px] text-slate-400">All capabilities</p></div>
+              </div>
+              <button type="button" className="mobile-icon-button" onClick={() => setMobileMenuOpen(false)} aria-label="Close tools menu"><X size={20} /></button>
+            </div>
+            <nav className="grid grid-cols-1 gap-1" aria-label="All Stanley destinations">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = location.pathname === item.path;
+                return <Link key={item.name} to={item.path} onClick={() => setMobileMenuOpen(false)} className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-xs font-semibold" style={{ color: isActive ? 'var(--accent)' : 'var(--text-secondary)', background: isActive ? 'var(--accent-light)' : 'transparent' }}>
+                  <Icon size={17} /><span className="flex-1">{item.name}</span>{item.name === 'Exceptions' && <ExceptionNavBadge />}
+                </Link>;
+              })}
+            </nav>
+            <div className="mt-5 border-t border-slate-100 pt-4">
+              <button type="button" onClick={handleSignOut} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-xs font-semibold text-rose-600"><LogOut size={17} /> Sign Out</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* Global Command Palette dialog */}
       <CommandPalette

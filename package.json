@@ -8,6 +8,12 @@
     "dev:backend": "node server.js",
     "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
     "build": "tsc -b && vite build",
+    "test:templates": "node scripts/auditBuiltInTemplates.mjs",
+    "test:ads": "node scripts/auditAdvertisedUseCases.mjs",
+    "test:deployment": "node scripts/auditDeploymentConfig.mjs",
+    "certify": "node scripts/certifyClaims.mjs",
+    "certify:capabilities": "node scripts/certifyCapabilities.mjs",
+    "verify:launch": "npm run build && npm run test:templates && npm run test:ads && npm run test:deployment && npm run certify && npm --prefix stanley-cloud-run run check:launch && npm --prefix stanley-cloud-run test && npm run certify:capabilities",
     "start": "node server.js"
   },
   "dependencies": {

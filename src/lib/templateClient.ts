@@ -4,7 +4,7 @@ export type TemplateState = 'draft' | 'approved' | 'published' | 'retired';
 export interface WorkflowTemplate {
   templateId: string; tenantId?: string; version: string; name: string; description: string; category: string;
   state: TemplateState; visibility: 'tenant' | 'organization' | 'public'; fingerprint?: string; requiredVaultRefs: string[];
-  workflow: { nodes: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>>; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> };
+  workflow: { nodes: Array<Record<string, unknown>>; edges: Array<Record<string, unknown>>; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown>; outputNodeId?: string; executionPolicy?: Record<string, unknown>; modelPolicy?: Record<string, unknown>; contextPolicy?: Record<string, unknown> };
   provenance: { type: 'builtin' | 'connector' | 'skill' | 'manual'; id?: string; version?: string; targetDomains?: string[] };
   health: { successCount: number; failureCount: number; verifiedSuccessRate: number; usageCount: number; compatibility: string; driftCount: number; lastSuccessfulAt?: string | null };
   createdAt?: string; updatedAt?: string; publishedAt?: string;

@@ -2,7 +2,7 @@ import { getFreshIdToken } from './firebaseAuth';
 
 export type RunStatus =
   | 'queued' | 'pending_approval' | 'approved' | 'running' | 'retrying'
-  | 'cancel_requested' | 'completed' | 'failed' | 'cancelled';
+  | 'cancel_requested' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 
 export interface CloudRunRecord {
   id: string;
@@ -13,6 +13,7 @@ export interface CloudRunRecord {
   logs: string[];
   scraped?: unknown;
   error?: string;
+  wait?: { type?: string; nodeId?: string; reason?: string };
 }
 
 export interface CloudRunResult {
@@ -23,10 +24,11 @@ export interface CloudRunResult {
   scraped?: unknown;
   error?: string;
   paused?: boolean;
+  wait?: CloudRunRecord['wait'];
 }
 
 const baseUrl = (import.meta.env.VITE_RUNNER_URL as string | undefined)?.replace(/\/$/, '');
-const terminal = new Set<RunStatus>(['pending_approval', 'completed', 'failed', 'cancelled']);
+const terminal = new Set<RunStatus>(['pending_approval', 'waiting', 'completed', 'failed', 'cancelled']);
 
 async function request(path: string, init: RequestInit = {}): Promise<{ success: boolean; run: CloudRunRecord }> {
   if (!baseUrl) throw new Error('Cloud runner is not configured.');
@@ -45,7 +47,8 @@ function toResult(run: CloudRunRecord): CloudRunResult {
   return {
     success: run.state === 'completed', runId: run.id, status: run.state,
     logs: run.logs || [], scraped: run.scraped, error: run.error,
-    paused: run.state === 'pending_approval',
+    paused: run.state === 'pending_approval' || run.state === 'waiting',
+    wait: run.wait,
   };
 }
 

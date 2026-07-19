@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Google Maps 42-business proof",
+    "workflowId": "WORKFLOW_CREATED_FROM_tpl-google-maps-local-leads",
+    "input": { "query": "dentists", "location": "Chicago, IL", "targetCount": 42, "candidateCount": 60 },
+    "expectedOutput": { "minItems": 42, "requiredFields": ["name", "address", "phone", "listingUrl"], "uniqueBy": "listingUrl" }
+  },
+  {
+    "name": "Pinterest 24-source proof",
+    "workflowId": "WORKFLOW_CREATED_FROM_tpl-pinterest-research-collector",
+    "input": { "query": "minimalist web design", "criteria": "Distinct, practical visual references for a modern minimalist landing page", "targetCount": 24, "candidateCount": 60 },
+    "expectedOutput": { "minItems": 24, "requiredFields": ["sourceUrl", "pinUrl"], "uniqueBy": "sourceUrl" }
+  }
+]

@@ -1,15 +1,17 @@
 const FLOW_ONLY_TYPES = new Set([
   'mission', 'parameter', 'trigger', 'navigate', 'click', 'type', 'wait',
-  'scrape', 'open_tab', 'switch_tab', 'close_tab', 'if', 'condition', 'goto',
-  'label', 'ai_prompt', 'js_code', 'integration', 'ai_agent', 'agent',
+  'scrape', 'open_tab', 'switch_tab', 'close_tab', 'if', 'condition',
+  'ai_prompt', 'integration', 'ai_agent', 'agent',
   'vision', 'approval', 'http_request', 'loop', 'transform', 'send_slack',
   'send_email', 'monitor', 'router', 'extract', 'extract_list', 'paginate',
   'webhook_trigger', 'schedule_trigger', 'connector', 'native_integration', 'assertion',
   'scroll', 'find_text', 'go_back', 'go_forward', 'send_keys', 'select_dropdown',
-  'hover', 'drag_drop', 'upload_file', 'download_file', 'mcp_tool'
+  'hover', 'drag_drop', 'upload_file', 'download_file', 'mcp_tool',
+  'scroll_until', 'dom_extract_list', 'visit_each', 'filter_list'
 ]);
 
-const DANGEROUS_TYPES = new Set(['js_code', 'send_email', 'send_slack', 'http_request', 'integration', 'connector', 'native_integration', 'mcp_tool', 'upload_file', 'download_file']);
+const DANGEROUS_TYPES = new Set(['send_email', 'send_slack', 'http_request', 'integration', 'connector', 'native_integration', 'mcp_tool', 'upload_file', 'download_file']);
+const { getOperation } = require('./native-integration-engine/catalog');
 
 class WorkflowContractError extends Error {
   constructor(issues) {
@@ -28,6 +30,8 @@ function buildExecutionPolicy(workflow) {
   return {
     maxNodes: clampInt(requested.maxNodes, 1, 100, 60),
     maxAgentSteps: clampInt(requested.maxAgentSteps, 1, 20, 8),
+    maxGraphSteps: clampInt(requested.maxGraphSteps, 10, 2000, 500),
+    maxExecutionMs: clampInt(requested.maxExecutionMs, 1000, 15 * 60 * 1000, 5 * 60 * 1000),
     maxRunAttempts: requested.retrySafe === true ? clampInt(requested.maxRunAttempts, 1, 3, 1) : 1,
     retrySafe: requested.retrySafe === true,
     allowCustomCode: requested.allowCustomCode === true,
@@ -77,7 +81,16 @@ function validateWorkflow(workflow) {
       const requestedSteps = clampInt(node.data?.maxSteps, 1, 1000, policy.maxAgentSteps);
       if (requestedSteps > policy.maxAgentSteps) issues.push(`Agent node "${node.id}" exceeds the ${policy.maxAgentSteps}-step policy.`);
     }
-    if (node.type === 'js_code' && !policy.allowCustomCode) issues.push(`Custom code node "${node.id}" is disallowed by policy.`);
+    if (node.type === 'scroll_until' && (!String(node.data?.itemSelector || '').trim() || !node.data?.targetCount)) issues.push(`Dynamic scroll node "${node.id}" requires itemSelector and targetCount.`);
+    if (node.type === 'dom_extract_list' && (!String(node.data?.itemSelector || '').trim() || !isObject(node.data?.fields))) issues.push(`DOM extraction node "${node.id}" requires itemSelector and fields.`);
+    if (node.type === 'visit_each' && (!String(node.data?.sourceNodeId || '').trim() || !String(node.data?.urlField || '').trim() || !isObject(node.data?.fields))) issues.push(`Detail enrichment node "${node.id}" requires sourceNodeId, urlField, and fields.`);
+    if (node.type === 'filter_list' && (!String(node.data?.sourceNodeId || '').trim() || !String(node.data?.criteria || '').trim())) issues.push(`AI list filter node "${node.id}" requires sourceNodeId and criteria.`);
+    if (node.type === 'assertion' && !String(node.data?.sourceNodeId || '').trim()) issues.push(`Assertion node "${node.id}" requires sourceNodeId.`);
+  }
+  for (const node of nodes) {
+    if (!['visit_each', 'filter_list', 'assertion'].includes(node.type)) continue;
+    const sourceNodeId = String(node.data?.sourceNodeId || '');
+    if (sourceNodeId && !nodesById[sourceNodeId]) issues.push(`Node "${node.id}" references missing source node "${sourceNodeId}".`);
   }
 
   const missions = nodes.filter((node) => node.type === 'mission');
@@ -116,7 +129,9 @@ function validateWorkflow(workflow) {
     for (const node of nodes) {
       if (!DANGEROUS_TYPES.has(node.type)) continue;
       const method = String(node.data?.method || 'GET').toUpperCase();
-      const requiresApproval = node.type !== 'http_request' || method !== 'GET';
+      const nativeOperation = ['integration', 'native_integration'].includes(node.type) ? getOperation(node.data?.integrationName || node.data?.operationName) : null;
+      const isReadOnly = node.type === 'http_request' ? method === 'GET' : node.type === 'connector' ? node.data?.readOnly === true : nativeOperation?.readWrite === 'read';
+      const requiresApproval = !isReadOnly;
       if (requiresApproval && !hasApprovalImmediatelyBefore(node.id, edges, nodesById)) {
         issues.push(`Side-effect node "${node.id}" requires an approval node immediately before it.`);
       }

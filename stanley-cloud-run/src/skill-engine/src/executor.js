@@ -15,7 +15,7 @@ function skillWorkflow(skill) {
   return { id: `skill:${skill.skillId}:${skill.version}`, name: skill.name, nodes: skill.nodes, edges: skill.edges, assertions: skill.assertions, executionPolicy: { allowAgenticRecovery: false, modelCallsDisabled: true, source: 'compiled_skill' } };
 }
 
-async function executeSkill(skillInput, { input = {}, secrets = {}, runner, mode = 'live', allowDraftForTest = false, approval = null, trustStore = null, tenantId, runId = null, orchestration = null } = {}) {
+async function executeSkill(skillInput, { input = {}, secrets = {}, runner, mode = 'live', allowDraftForTest = false, approval = null, trustStore = null, tenantId, runId = null, orchestration = null, runnerOptions = {} } = {}) {
   const skill = validateSkill(skillInput); const uid = tenantId || skill.tenantId;
   if (typeof runner !== 'function') throw new SkillExecutionError('RUNNER_REQUIRED', 'Skill execution requires a deterministic runner.', { safeToFallback: true });
   if (skill.state !== 'active' && !allowDraftForTest) throw new SkillExecutionError('NOT_ACTIVE', 'Skill is not active.', { safeToFallback: true });
@@ -32,7 +32,7 @@ async function executeSkill(skillInput, { input = {}, secrets = {}, runner, mode
   const trust = trustStore && runId ? new TrustRuntime({ store: trustStore, uid, runId, workflow, overrides: { mode } }) : null;
   try {
     const prepared = trust ? await trust.begin(input) : { workflow };
-    const result = await runner(prepared.workflow, scopedSecrets, input, { modelCallsDisabled: true, allowAgenticRecovery: false, skillId: skill.skillId, skillVersion: skill.version, mode, trust, orchestration, tenantId: uid, runId });
+    const result = await runner(prepared.workflow, scopedSecrets, input, { ...runnerOptions, modelCallsDisabled: true, allowAgenticRecovery: false, skillId: skill.skillId, skillVersion: skill.version, mode, trust, orchestration, tenantId: uid, runId });
     const output = result?.output ?? result?.scraped ?? result ?? {};
     try { assertSchema(output, skill.outputSchema, 'Skill output'); } catch (error) { throw new SkillExecutionError('OUTPUT_DRIFT', error.message, { safeToFallback: result?.sideEffectsStarted !== true, drift: true }); }
     const assertions = evaluateAssertions(skill.assertions || [], { input, output, scraped: result?.scraped || {}, run: result?.run || {} });

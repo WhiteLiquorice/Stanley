@@ -1,6 +1,6 @@
 import {
   Globe, Plus, Type, Database, Clock, ExternalLink, RefreshCw, X,
-  GitFork, ArrowRight, Bookmark, Sparkles, Code, Circle, Target, Tag, Shield,
+  GitFork, Sparkles, Target, Tag, Shield, Bot,
   KeyRound, Play, Workflow
 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -14,23 +14,25 @@ interface NodeDoc {
 }
 
 const NODES: NodeDoc[] = [
-  { icon: <Target size={16} />, name: 'Mission (super node)', what: 'The overall goal of the automation. Stanley feeds it to the AI on every step so it understands the intent, not just the mechanics — which makes ambiguous steps far more reliable. It is not part of the flow; just having one on the canvas is enough (you don\'t have to connect it).', fields: 'Goal text' },
+  { icon: <Target size={16} />, name: 'Mission (super node)', what: 'The overall goal and guardrail for the automation. Every workflow has exactly one Mission connected to its Trigger with a context link, so AI-assisted steps share the same bounded intent.', fields: 'Goal text' },
   { icon: <Tag size={16} />, name: 'Parameter (sub node)', what: 'Supplies specific values to the single step it is wired to (via a purple context link). Use "value" to set exactly what gets typed/used — e.g. which account to log in with — so the AI never has to guess. Swap the parameter to switch between, say, a personal and a business login.', fields: 'Any key/value; value, account, etc.' },
-  { icon: <Globe size={16} />, name: 'Trigger', what: 'The starting point of a run and its initial URL. A run needs a starting URL somewhere — here, or on a Navigate / Open Tab node placed before it.', fields: 'Target URL' },
+  { icon: <Globe size={16} />, name: 'Trigger', what: 'The starting point of a run. Browser workflows can provide an initial URL here; API-only workflows do not need one.', fields: 'Target URL (browser workflows)' },
   { icon: <Globe size={16} />, name: 'Navigate', what: 'Go to a URL in the current tab.', fields: 'Target URL' },
   { icon: <Plus size={16} />, name: 'Click', what: 'Click an element. Describe it in plain language (preferred) and/or give a CSS selector. Stanley tries the selector, then semantic matching, then AI vision.', fields: 'Description, CSS selector (optional)' },
   { icon: <Type size={16} />, name: 'Type', what: 'Type text into a field. Reference a secret with vault:Name, or a login with vault:Name.username / vault:Name.password.', fields: 'Description, value, CSS selector (optional)' },
   { icon: <Database size={16} />, name: 'Scrape', what: 'Extract visible text from the page (optionally scoped to a selector). The result is available to later steps and AI prompts as {{lastScrape}}.', fields: 'CSS selector (optional)' },
-  { icon: <ExternalLink size={16} />, name: 'Open Tab', what: 'Open a new tab and make it the working tab. Put this before the trigger to run in a fresh tab instead of taking over your current one.', fields: 'URL (optional), label' },
+  { icon: <RefreshCw size={16} />, name: 'Load Dynamic Feed', what: 'Scroll the page or a nested results panel until a target number of repeated items is visible, with strict scroll and stagnation limits.', fields: 'Container selector, item selector, target count, maximum scrolls' },
+  { icon: <Database size={16} />, name: 'Capture DOM List', what: 'Build records deterministically from repeated page elements, including text, links, images, labels, and other approved attributes. Duplicate records can be removed by a declared key.', fields: 'Item selector, field map, dedupe key, maximum items' },
+  { icon: <ExternalLink size={16} />, name: 'Enrich Each Result', what: 'Visit each URL from an earlier captured list and merge selected detail-page fields back into the record. The number of pages is always bounded.', fields: 'Source node, URL field, detail field map, maximum pages' },
+  { icon: <Sparkles size={16} />, name: 'AI Filter List', what: 'Select records against explicit natural-language criteria while preserving a declared JSON shape. Missing values may not be invented.', fields: 'Source node, criteria, output shape' },
+  { icon: <Shield size={16} />, name: 'Verify Result Contract', what: 'Fail the run unless the result reaches its minimum count, contains required fields, and satisfies an optional uniqueness rule. Use this for workflows whose outcome is advertised or otherwise promised.', fields: 'Source node, minimum count, required fields, unique field' },
+  { icon: <ExternalLink size={16} />, name: 'Open Tab', what: 'Open a new tab during a browser workflow and make it the working tab.', fields: 'URL (optional), label' },
   { icon: <RefreshCw size={16} />, name: 'Switch Tab', what: 'Switch which open tab is active.', fields: 'Tab id / label / index' },
   { icon: <X size={16} />, name: 'Close Tab', what: 'Close an open tab.', fields: 'Tab id / label / index' },
   { icon: <GitFork size={16} />, name: 'If / Branch', what: 'A decision point. It evaluates a condition and exposes True/False so its outgoing edges can route the flow down different paths. (This is about choosing an OUTPUT path — not merging inputs.)', fields: 'Condition' },
-  { icon: <ArrowRight size={16} />, name: 'Goto', what: 'Jump to a labeled step — useful for loops and retries.', fields: 'Label' },
-  { icon: <Bookmark size={16} />, name: 'Label', what: 'A named anchor that a Goto can jump to.', fields: 'Label name' },
   { icon: <Clock size={16} />, name: 'Wait', what: 'Pause for a set number of milliseconds, e.g. to let a page settle.', fields: 'Duration (ms)' },
   { icon: <Sparkles size={16} />, name: 'AI Prompt', what: 'Run an AI step mid-flow — e.g. classify or summarize what was just scraped. Its answer is available to later steps and conditions as {{lastAiResult}} / {{lastScrape}}.', fields: 'Prompt, system instruction (optional)' },
-  { icon: <Code size={16} />, name: 'JS Script', what: 'Run custom JavaScript with access to the page agent, scraped data, and secrets — for advanced cases.', fields: 'Code' },
-  { icon: <Circle size={16} />, name: 'Record Steps', what: 'Demonstrate a task in a real browser and turn your actions into nodes (desktop recorder).', fields: 'Start URL' },
+  { icon: <Bot size={16} />, name: 'Agent', what: 'Give the bounded browser planner a goal and strict step budget. Every model decision is constrained to Stanley’s supported browser actions.', fields: 'Goal, maximum steps' },
 ];
 
 export function Guide() {
@@ -48,7 +50,7 @@ export function Guide() {
             <Workflow size={16} className="text-indigo-600" /> What Stanley is
           </h3>
           <p className="text-sm text-slate-600 leading-relaxed">
-            Stanley is a <strong>neuro-symbolic</strong> browser automation tool. You draw a workflow as a graph of
+            Stanley is a <strong>hybrid neuro-symbolic</strong> automation system. You draw a workflow as a graph of
             nodes — the <em>symbolic</em> skeleton that says what to do and in what order. At run time an AI fills in
             the gaps: when a step can't be matched by a CSS selector or by the element's name, Stanley looks at the
             page and figures out where to act. The graph keeps the AI constrained and predictable; the AI keeps the
@@ -62,8 +64,8 @@ export function Guide() {
             <Play size={16} className="text-emerald-600" /> Running an automation
           </h3>
           <ul className="text-sm text-slate-600 leading-relaxed list-disc list-inside space-y-2">
-            <li><strong>Headless (cloud):</strong> runs on Stanley's servers in a fresh browser. Nothing happens in your own browser, and you can keep working. This is the recommended path.</li>
-            <li><strong>In-browser:</strong> runs in your Chrome via the extension, in a tab you can watch.</li>
+            <li><strong>Cloud browser:</strong> runs browser steps on Stanley's servers in an isolated session, so you can keep working.</li>
+            <li><strong>API execution:</strong> native integrations and approved generated connectors can run without opening a browser.</li>
             <li>Each click/type escalates through three tiers: <strong>CSS selector → element name → AI vision</strong>. Cheap, exact matches are tried first; the AI is only used when needed.</li>
           </ul>
         </div>
