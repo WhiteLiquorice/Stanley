@@ -34,5 +34,6 @@ stanley-daemon/
 chrome-store-submission/
 legacy-backup/
 Downloads/
-
-
+# Exclude prototypes, GPT additions, and website assets from repo
+PROTOTYPES/
+GPT-Additions/

@@ -1,3 +1,0 @@
-const test = require('node:test'); const assert = require('node:assert/strict');
-const { applyOrchestrationHooks } = require('../scripts/patchOrchestrationHooks');
-test('adds deterministic durable hooks exactly once', () => { const source = `async function x() {\n    const goal = effectiveNode.data?.description || ctx.missionPrompt || \`Locate and perform action on the page.\`;\n    if (onBlocked && typeof agent.isPageBlocked === 'function') {\n    }\n}`; const patched = applyOrchestrationHooks(source); assert.match(patched, /orchestration\.beforeNode/); assert.match(patched, /orchestration\.afterNode/); assert.equal(applyOrchestrationHooks(patched), patched); });
